@@ -288,6 +288,11 @@ class MangaNotifierApp(tk.Tk):
 
         # On close
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Set window icon
+        app_icon_path = ASSETS_DIR / "app_icon.ico"
+        if app_icon_path.exists():
+            self.iconbitmap(str(app_icon_path))
 
     # ── UI Construction ───────────────────────────────────────────────────────
 
@@ -706,7 +711,7 @@ class AboutDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("About Manga Notifier")
-        self.geometry("360x220")
+        self.geometry("360x360")
         self.configure(bg=DARK_CARD)
         self.resizable(False, False)
         self.transient(parent)
@@ -723,7 +728,24 @@ class AboutDialog(tk.Toplevel):
         self.geometry(f"+{px + (pw - w)//2}+{py + (ph - h)//2}")
 
     def _build(self):
-        tk.Label(self, text="Manga Notifier", fg=TEXT_PRIMARY, bg=DARK_CARD, font=("Segoe UI", 16, "bold")).pack(pady=(20, 5))
+        try:
+            from PIL import Image, ImageTk
+            import sys
+            
+            if getattr(sys, 'frozen', False):
+                assets_dir = Path(sys._MEIPASS) / "data" / "assets"
+            else:
+                assets_dir = Path(__file__).parent / "data" / "assets"
+                
+            app_icon_path = assets_dir / "app_icon.png"
+            img = Image.open(app_icon_path)
+            img = img.resize((72, 72), Image.LANCZOS)
+            self._photo = ImageTk.PhotoImage(img)
+            tk.Label(self, image=self._photo, bg=DARK_CARD).pack(pady=(20, 0))
+        except Exception:
+            pass
+
+        tk.Label(self, text="Manga Notifier", fg=TEXT_PRIMARY, bg=DARK_CARD, font=("Segoe UI", 16, "bold")).pack(pady=(10, 5))
         tk.Label(self, text="Your premium manga tracking companion.", fg=TEXT_MUTED, bg=DARK_CARD, font=FONT_BODY).pack()
 
         frame = tk.Frame(self, bg=DARK_CARD2, padx=16, pady=12)
