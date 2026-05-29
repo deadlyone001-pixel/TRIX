@@ -13,11 +13,12 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Optional
 
-# ─── Setup logging before any imports ────────────────────────────────────────
 if getattr(sys, 'frozen', False):
     BASE_DIR = Path(sys.executable).parent
+    ASSETS_DIR = Path(sys._MEIPASS) / "data" / "assets"
 else:
     BASE_DIR = Path(__file__).parent
+    ASSETS_DIR = BASE_DIR / "data" / "assets"
 
 LOG_DIR = BASE_DIR / "data"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -269,7 +270,7 @@ class MangaNotifierApp(tk.Tk):
         
         self.site_icons = {}
         for site in ["kuaikan", "bilibili", "mangadex", "ac_qq"]:
-            p = BASE_DIR / "data" / "assets" / f"{site}.png"
+            p = ASSETS_DIR / f"{site}.png"
             if p.exists():
                 try:
                     self.site_icons[site] = tk.PhotoImage(file=str(p))
