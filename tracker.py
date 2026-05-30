@@ -24,8 +24,6 @@ DATA_FILE = BASE_DIR / "data" / "tracked.json"
 
 # Chapters updated within this window are shown as "NEW" in the UI
 NEW_CHAPTER_WINDOW_HOURS = 8
-
-
 @dataclass
 class TrackedManga:
     url: str
@@ -35,12 +33,13 @@ class TrackedManga:
     last_chapter_url: str
     added_at: float = field(default_factory=time.time)
     last_checked: float = field(default_factory=lambda: 0.0)
-    last_chapter_found_at: float = field(default_factory=lambda: 0.0)  # when new ch was detected
+    last_chapter_found_at: float = field(default_factory=lambda: 0.0)
     error_count: int = 0
     cover_url: str = ""
-    title_resolved: bool = False  # True once scraper has confirmed the display name
-    has_custom_title: bool = False # True if user manually provided a display name
+    title_resolved: bool = False
+    has_custom_title: bool = False
     history: list = field(default_factory=list)
+    user_status: str = "unknown"   # "unknown" | "active" | "hiatus" — set manually by user
 
     # ── derived helpers ───────────────────────────────────────────────────────
 
@@ -54,7 +53,7 @@ class TrackedManga:
 
     @property
     def chapter_age_str(self) -> str:
-        """Human-readable age of the latest chapter detection (e.g. '2h ago')."""
+        """Human-readable age of the latest chapter detection."""
         if self.last_chapter_found_at <= 0:
             return ""
         elapsed = time.time() - self.last_chapter_found_at
@@ -87,6 +86,7 @@ class TrackedManga:
             title_resolved=d.get("title_resolved", False),
             has_custom_title=d.get("has_custom_title", False),
             history=d.get("history", []),
+            user_status=d.get("user_status", "unknown"),
         )
 
 
@@ -150,6 +150,13 @@ class MangaTracker:
     def get(self, url: str) -> Optional[TrackedManga]:
         return self._manga.get(url)
 
+    def set_user_status(self, url: str, status: str):
+        """Set the manual status ('unknown', 'active', 'hiatus') and save."""
+        entry = self._manga.get(url)
+        if entry:
+            entry.user_status = status
+            self.save()
+
     # ── update helpers ────────────────────────────────────────────────────────
 
     def update_chapter(
@@ -168,8 +175,7 @@ class MangaTracker:
             return False
 
         is_new = chapter.number > entry.last_chapter_num
-        
-        # Specific hack to clear out huge Bilibili hash numbers
+
         if entry.last_chapter_num > 10000 and chapter.number < 10000:
             is_new = True
 
@@ -177,15 +183,14 @@ class MangaTracker:
             entry.last_chapter_num = chapter.number
             entry.last_chapter_title = chapter.title
             entry.last_chapter_url = chapter.url
-            entry.last_chapter_found_at = time.time()  # stamp when new chapter detected
-            
+            entry.last_chapter_found_at = time.time()
             entry.history.insert(0, {
                 "num": chapter.number,
                 "title": chapter.title,
                 "url": chapter.url,
-                "time": time.time()
+                "time": time.time(),
             })
-            entry.history = entry.history[:5]  # keep last 5 chapters in thread
+            entry.history = entry.history[:5]
 
         # Always update metadata
         if manga_title and manga_title not in ("Unknown", ""):

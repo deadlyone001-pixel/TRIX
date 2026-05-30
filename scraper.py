@@ -286,44 +286,83 @@ def _scrape_bilibili_manga(url: str, session: requests.Session) -> MangaInfo:
                 manga_title = season.get("title") or manga_title
                 cover = season.get("vertical_cover") or season.get("horizontal_cover") or ""
 
-                # last_ord = the ordinal of the latest chapter
-                last_ord = season.get("last_ord")
-                last_short = season.get("last_short_title") or ""  # e.g. "第102"
+                last_ord = season.get("last_ord", 0)
+                last_short = season.get("last_short_title") or ""
 
-                if last_ord is not None:
-                    # Try to find the latest episode in ep_list for its title
-                    ep_list = season.get("ep_list", [])
-                    latest_ep = None
-                    if ep_list:
-                        # ep_list is ordered newest→oldest typically
+                ep_list = season.get("ep_list", [])
+
+                # ── pick the best episode ─────────────────────────────────────
+                # Some comics have last_ord=0 (e.g. locked/preview), so we
+                # walk ep_list and prefer the entry whose ord matches last_ord,
+                # then fall back to highest ord, then highest list-index.
+                latest_ep = None
+                if ep_list:
+                    if last_ord:
                         for ep in ep_list:
                             if ep.get("ord") == last_ord:
                                 latest_ep = ep
                                 break
-                        if latest_ep is None:
-                            # Take the one with highest ord
-                            latest_ep = max(ep_list, key=lambda e: e.get("ord", 0))
+                    if latest_ep is None:
+                        # highest ord wins; 0-ord entries sorted last
+                        latest_ep = max(ep_list, key=lambda e: e.get("ord", 0))
+                    # If ALL ords are 0 (some series store numbers only in
+                    # short_title like "第92章"), use the first item in the
+                    # list which Bilibili orders newest→oldest.
+                    if latest_ep.get("ord", 0) == 0 and ep_list:
+                        latest_ep = ep_list[0]
 
-                    if latest_ep:
-                        ch_num = float(latest_ep.get("ord", last_ord))
-                        short = latest_ep.get("short_title") or last_short or f"Ch.{int(ch_num)}"
-                        title_part = latest_ep.get("title") or ""
-                        ch_title = f"{short}{title_part}".strip() or f"Chapter {int(ch_num)}"
-                        ch_url = f"https://manga.bilibili.com/mc{comic_id}/{latest_ep.get('id', '')}"
+                def _parse_ch_num(text: str) -> float:
+                    """Extract a chapter number from arbitrary Chinese/English text."""
+                    # Convert Chinese numerals for common cases handled inline
+                    cn_map = {"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,
+                              "八":8,"九":9,"十":10,"百":100,"千":1000}
+                    # Arabic digits first
+                    m_ar = re.search(r"(\d+(?:\.\d+)?)", text)
+                    if m_ar:
+                        return float(m_ar.group(1))
+                    # Try naive Chinese numeral conversion (handles 九十二 → 92)
+                    total, cur = 0, 0
+                    for ch in text:
+                        v = cn_map.get(ch)
+                        if v is None:
+                            continue
+                        if v >= 10:
+                            cur = max(cur, 1) * v
+                            if v == 1000:
+                                total += cur; cur = 0
+                        else:
+                            cur += v
+                    total += cur
+                    return float(total) if total else 0.0
+
+                if latest_ep:
+                    raw_ord  = latest_ep.get("ord", 0)
+                    short    = latest_ep.get("short_title") or last_short or ""
+                    title_pt = latest_ep.get("title") or ""
+                    ch_title = f"{short}{title_pt}".strip() or f"Chapter {int(raw_ord)}"
+                    ch_url   = f"https://manga.bilibili.com/mc{comic_id}/{latest_ep.get('id', '')}"
+
+                    # Determine the best numeric chapter number
+                    if raw_ord and raw_ord > 0:
+                        ch_num = float(raw_ord)
                     else:
-                        ch_num = float(last_ord)
-                        ch_title = last_short or f"Chapter {int(ch_num)}"
-                        ch_url = url
+                        ch_num = _parse_ch_num(short) or _parse_ch_num(title_pt)
+                        if not ch_num:
+                            ch_num = float(len(ep_list))
+                else:
+                    ch_num   = float(last_ord) if last_ord else float(len(ep_list))
+                    ch_title = last_short or f"Chapter {int(ch_num)}"
+                    ch_url   = url
 
-                    logger.info(
-                        f"Bilibili manga (mobile SSR): {manga_title} — "
-                        f"Ch.{ch_num}: {ch_title}"
-                    )
-                    return MangaInfo(
-                        title=manga_title,
-                        cover_url=cover,
-                        latest_chapter=ChapterInfo(ch_num, ch_title, ch_url),
-                    )
+                logger.info(
+                    f"Bilibili manga (mobile SSR): {manga_title} — "
+                    f"Ch.{ch_num}: {ch_title}"
+                )
+                return MangaInfo(
+                    title=manga_title,
+                    cover_url=cover,
+                    latest_chapter=ChapterInfo(ch_num, ch_title, ch_url),
+                )
 
         except Exception as e:
             logger.warning(f"Bilibili mobile SSR parse failed: {e}")
@@ -493,10 +532,10 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
     soup = BeautifulSoup(html, "lxml")
 
     # Title
-    title = "Unknown"
+    manga_title = "Unknown"
     title_el = soup.select_one(".works-intro-title strong")
     if title_el:
-        title = title_el.get_text(strip=True)
+        manga_title = title_el.get_text(strip=True)
 
     # Cover
     cover_url = ""
@@ -504,36 +543,63 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
     if cover_el:
         cover_url = cover_el.get("src", "")
 
+    def _parse_cn_chapter_num(text: str) -> float:
+        """
+        Extract chapter number from Chinese chapter titles.
+        Handles Arabic digits AND Chinese numeral words (九十二→92).
+        """
+        # Arabic digits first (fastest path)
+        m = re.search(r"(\d+(?:\.\d+)?)", text)
+        if m:
+            return float(m.group(1))
+        # Chinese numeral conversion
+        cn = {"零":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,
+              "八":8,"九":9,"十":10,"百":100,"千":1000,"万":10000}
+        total, cur, prev_unit = 0, 0, 1
+        for ch in text:
+            v = cn.get(ch)
+            if v is None:
+                if total or cur:  # stop at non-numeral after finding digits
+                    break
+                continue
+            if v >= 10:
+                cur = max(cur, 1) * v
+                if v >= 1000:
+                    total += cur; cur = 0
+            else:
+                cur += v
+        return float(total + cur) if (total + cur) else 0.0
+
     # Chapters
     chapters = []
     for a in soup.select(".works-chapter-item a"):
-        ch_title = a.get("title") or a.get_text(strip=True)
-        ch_href = a.get("href", "")
-        ch_url = "https://ac.qq.com" + ch_href if ch_href.startswith("/") else ch_href
+        ch_title = (a.get("title") or a.get_text(strip=True)).strip()
+        ch_href  = a.get("href", "")
+        ch_url   = "https://ac.qq.com" + ch_href if ch_href.startswith("/") else ch_href
 
-        num = 0.0
-        # Looking for things like "第127话" or "Chapter 127"
-        m = re.search(r"(?:第|Ch\.?)?\s*(\d+(?:\.\d+)?)", ch_title, re.IGNORECASE)
-        if m:
-            num = float(m.group(1))
+        # Strip leading manga-title prefix (e.g. "诡浊仙道：第九十二章 傩沈" → "第九十二章 傩沈")
+        if manga_title and ch_title.startswith(manga_title):
+            ch_title = ch_title[len(manga_title):].lstrip("：: ").strip()
 
+        num = _parse_cn_chapter_num(ch_title)
         chapters.append(ChapterInfo(num, ch_title, ch_url))
 
     if not chapters:
         logger.warning(f"No chapters found for Tencent AC URL: {url}")
-        return MangaInfo(title=title, latest_chapter=None, cover_url=cover_url)
+        return MangaInfo(title=manga_title, latest_chapter=None, cover_url=cover_url)
 
-    # Sort numerically just in case
-    chapters.sort(key=lambda c: c.number)
+    # Sort numerically; if all nums are 0, preserve list order (last = newest)
+    if any(c.number > 0 for c in chapters):
+        chapters.sort(key=lambda c: c.number)
     latest = chapters[-1]
 
     logger.info(
-        f"Tencent AC: {title} — "
+        f"Tencent AC: {manga_title} — "
         f"Ch.{latest.number:.0f}: {latest.title} "
         f"(total {len(chapters)})"
     )
 
-    return MangaInfo(title=title, latest_chapter=latest, cover_url=cover_url)
+    return MangaInfo(title=manga_title, latest_chapter=latest, cover_url=cover_url)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

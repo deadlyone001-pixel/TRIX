@@ -74,6 +74,7 @@ TEXT_LINK    = T["link"]
 SUCCESS      = T["success"]
 WARNING      = T["warning"]
 ERROR_COL    = T["error"]
+DANGER       = T["error"]   # alias used for hiatus indicator
 BORDER       = T["border"]
 
 def _sync_globals():
@@ -83,7 +84,7 @@ def _sync_globals():
                       ("ACCENT","accent"),("ACCENT_HOVER","accent_hover"),
                       ("TEXT_PRIMARY","text"),("TEXT_MUTED","muted"),("TEXT_LINK","link"),
                       ("SUCCESS","success"),("WARNING","warning"),
-                      ("ERROR_COL","error"),("BORDER","border")]:
+                      ("ERROR_COL","error"),("DANGER","error"),("BORDER","border")]:
         setattr(_m, attr, T[key])
 
 FONT_TITLE   = ("Segoe UI", 18, "bold")
@@ -149,10 +150,11 @@ class RoundedButton(tk.Frame):
 class MangaCard(tk.Frame):
     """A single manga entry card in the list."""
 
-    def __init__(self, master, entry, icons, on_remove, on_open_url, on_edit_title, **kwargs):
+    def __init__(self, master, entry, icons, on_remove, on_open_url, on_edit_title, on_status_change=None, **kwargs):
         super().__init__(master, bg=DARK_CARD2, **kwargs)
         self.entry = entry
         self.icons = icons
+        self._on_status_change = on_status_change
         self._build(on_remove, on_open_url, on_edit_title)
 
     def _build(self, on_remove, on_open_url, on_edit_title):
@@ -177,9 +179,51 @@ class MangaCard(tk.Frame):
         else:
             tk.Label(left, text=" ", bg=DARK_CARD2, width=2).pack(side="left")
 
-        dot_color = SUCCESS if self.entry.last_chapter_num > 0 else TEXT_MUTED
-        dot = tk.Label(left, text="●", fg=dot_color, bg=DARK_CARD2, font=("Segoe UI", 8))
+        # Status dot — click to cycle: unknown → active → hiatus → unknown
+        STATUS_CYCLE = ["unknown", "active", "hiatus"]
+        STATUS_COLORS = {"unknown": TEXT_MUTED, "active": SUCCESS, "hiatus": DANGER}
+        STATUS_TIPS   = {
+            "unknown": "Status unknown  |  Click to set",
+            "active":  "Active  |  Click to change",
+            "hiatus":  "On hiatus  |  Click to change",
+        }
+        current_status = getattr(self.entry, "user_status", "unknown")
+        dot_color = STATUS_COLORS.get(current_status, TEXT_MUTED)
+
+        dot = tk.Label(left, text="●", fg=dot_color, bg=DARK_CARD2,
+                       font=("Segoe UI", 9), cursor="hand2")
         dot.pack(side="left", padx=(0, 6))
+
+        def _cycle_status(e=None):
+            states = STATUS_CYCLE
+            cur = getattr(self.entry, "user_status", "unknown")
+            nxt = states[(states.index(cur) + 1) % len(states)] if cur in states else "active"
+            self.entry.user_status = nxt
+            dot.configure(fg=STATUS_COLORS[nxt])
+            _update_tip(nxt)
+            if self._on_status_change:
+                self._on_status_change(self.entry.url, nxt)
+
+        def _update_tip(status):
+            nonlocal _current_tip
+            _current_tip = STATUS_TIPS.get(status, "")
+
+        _current_tip = STATUS_TIPS.get(current_status, "")
+
+        def _show_tip(e):
+            self._tip = tk.Toplevel(self)
+            self._tip.wm_overrideredirect(True)
+            self._tip.wm_geometry(f"+{e.x_root+12}+{e.y_root+4}")
+            tk.Label(self._tip, text=_current_tip, bg="#2a2a2a", fg="#ffffff",
+                     font=("Segoe UI", 8), padx=6, pady=3, relief="solid", bd=1).pack()
+
+        def _hide_tip(e):
+            if hasattr(self, "_tip") and self._tip:
+                self._tip.destroy(); self._tip = None
+
+        dot.bind("<Button-1>", _cycle_status)
+        dot.bind("<Enter>", _show_tip)
+        dot.bind("<Leave>", _hide_tip)
 
         domain = ""
         if "kuaikanmanhua.com" in self.entry.url: domain = "kuaikan"
@@ -506,6 +550,21 @@ class MangaNotifierApp(tk.Tk):
         self._manga_canvas = canvas
 
     def _build_status_bar(self):
+        # ── Legend bar (above status bar) ────────────────────────────────────
+        legend = tk.Frame(self, bg=DARK_CARD, height=24)
+        legend.pack(fill="x", side="bottom")
+        legend.pack_propagate(False)
+
+        tk.Label(legend, text="Dot status — click to set:",
+                 fg=TEXT_MUTED, bg=DARK_CARD, font=("Segoe UI", 8),
+                 padx=12).pack(side="left")
+        for color, label in [(SUCCESS, "Active"), (DANGER, "Hiatus"), (TEXT_MUTED, "Unknown")]:
+            tk.Label(legend, text="●", fg=color, bg=DARK_CARD, font=("Segoe UI", 9)
+                     ).pack(side="left", padx=(8, 2))
+            tk.Label(legend, text=label, fg=TEXT_MUTED, bg=DARK_CARD,
+                     font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
+
+        # ── Status bar ────────────────────────────────────────────────────────
         bar = tk.Frame(self, bg=DARK_CARD, height=28)
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
@@ -550,6 +609,7 @@ class MangaNotifierApp(tk.Tk):
                 on_remove=self._remove_manga,
                 on_open_url=self._open_url,
                 on_edit_title=self._edit_manga_title,
+                on_status_change=self._set_manga_status,
             )
             card.pack(fill="x", pady=(0, 4))
 
@@ -559,6 +619,10 @@ class MangaNotifierApp(tk.Tk):
 
     def _open_url(self, url: str):
         webbrowser.open(url)
+
+    def _set_manga_status(self, url: str, status: str):
+        """Called when the user clicks a card's status dot to cycle its state."""
+        self.tracker.set_user_status(url, status)
         
     def _show_about(self):
         AboutDialog(self)
