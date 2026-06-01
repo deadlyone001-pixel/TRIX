@@ -230,6 +230,8 @@ class MangaCard(tk.Frame):
         elif "bilibili.com" in self.entry.url: domain = "bilibili"
         elif "mangadex.org" in self.entry.url: domain = "mangadex"
         elif "ac.qq.com" in self.entry.url: domain = "ac_qq"
+        elif "naver.com" in self.entry.url: domain = "naver"
+        elif "kakao.com" in self.entry.url: domain = "kakao"
 
         if domain and domain in self.icons:
             icon_lbl = tk.Label(left, image=self.icons[domain], bg=DARK_CARD2)
@@ -384,7 +386,7 @@ class MangaNotifierApp(tk.Tk):
         )
         
         self.site_icons = {}
-        for site in ["kuaikan", "bilibili", "mangadex", "ac_qq"]:
+        for site in ["kuaikan", "bilibili", "mangadex", "ac_qq", "naver", "kakao"]:
             p = ASSETS_DIR / f"{site}.png"
             if p.exists():
                 try:
