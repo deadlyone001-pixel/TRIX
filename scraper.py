@@ -603,6 +603,170 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Korean platform scrapers
+# ─────────────────────────────────────────────────────────────────────────────
+
+KR_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    "Referer": "https://www.google.com/",
+}
+
+
+def _scrape_naver_webtoon(url: str, session: requests.Session) -> MangaInfo:
+    """
+    Parse comic.naver.com/webtoon using the official JSON article-list API.
+    URL format: https://comic.naver.com/webtoon/list?titleId=769209
+    """
+    m = re.search(r'titleId=(\d+)', url)
+    if not m:
+        raise ValueError(f"Cannot extract titleId from: {url}")
+    title_id = m.group(1)
+
+    api = f"https://comic.naver.com/api/article/list?titleId={title_id}&page=1&sort=DESC"
+    resp = session.get(api, headers=KR_HEADERS, timeout=TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+
+    articles = data.get("articleList", [])
+    if not articles:
+        # fallback: try to get title from the HTML page
+        page = session.get(url, headers=KR_HEADERS, timeout=TIMEOUT)
+        soup = BeautifulSoup(page.text, "lxml")
+        og = soup.find("meta", property="og:title")
+        title = og["content"].split(" : ")[0].strip() if og else "Unknown"
+        return MangaInfo(title=title, cover_url="", latest_chapter=None)
+
+    latest = articles[0]
+    # volumeNo is the episode sequence number; subtitle is like "159화"
+    ch_num   = float(latest.get("volumeNo", 0))
+    subtitle = latest.get("subtitle", f"{int(ch_num)}화")
+    # Parse Arabic numeral from subtitle (e.g. "159화" → 159)
+    m_num = re.search(r'(\d+(?:\.\d+)?)', subtitle)
+    if m_num:
+        ch_num = float(m_num.group(1))
+    ch_url = f"https://comic.naver.com/webtoon/detail?titleId={title_id}&no={int(ch_num)}"
+
+    # Get manga title from HTML (API doesn't include it)
+    title = "Unknown"
+    try:
+        page = session.get(url, headers=KR_HEADERS, timeout=TIMEOUT)
+        soup = BeautifulSoup(page.text, "lxml")
+        og = soup.find("meta", property="og:title")
+        if og and og.get("content"):
+            title = og["content"].split(" : ")[0].strip()
+    except Exception:
+        pass
+
+    logger.info(f"Naver Webtoon: {title} — Ch.{ch_num}: {subtitle}")
+    return MangaInfo(title=title, cover_url="", latest_chapter=ChapterInfo(ch_num, subtitle, ch_url))
+
+
+def _scrape_naver_series(url: str, session: requests.Session) -> MangaInfo:
+    """
+    Parse series.naver.com/comic using the detail page HTML.
+    URL format: https://series.naver.com/comic/detail.series?productNo=6030941
+    Latest episode number is extracted from the highest ³µ numeral on the page.
+    """
+    resp = session.get(url, headers=KR_HEADERS, timeout=TIMEOUT)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # Title from og:title (strip [독점] suffixes)
+    og = soup.find("meta", property="og:title")
+    manga_title = og["content"].strip() if og and og.get("content") else "Unknown"
+    manga_title = re.sub(r'\[.*?\]', '', manga_title).strip()
+
+    # All 화 numbers on the page — the maximum is the latest chapter
+    ep_nums = re.findall(r'(\d+)화', resp.text)
+    if not ep_nums:
+        return MangaInfo(title=manga_title, cover_url="", latest_chapter=None)
+
+    ch_num   = float(max(int(n) for n in ep_nums))
+    ch_title = f"{int(ch_num)}화"
+    m = re.search(r'productNo=(\d+)', url)
+    product_no = m.group(1) if m else ""
+    ch_url = f"https://series.naver.com/comic/viewer.series?productNo={product_no}"
+
+    logger.info(f"Naver Series: {manga_title} — Ch.{ch_num}")
+    return MangaInfo(title=manga_title, cover_url="", latest_chapter=ChapterInfo(ch_num, ch_title, ch_url))
+
+
+def _scrape_kakao_page(url: str, session: requests.Session) -> MangaInfo:
+    """
+    Parse page.kakao.com/content.
+    Strategy:
+      1. Try api-page.kakao.com REST episode list (works without auth for some series)
+      2. Parse __NEXT_DATA__ JSON embedded in the SSR page (singleCount / episodeList)
+      3. Fallback: regex max 화 number from HTML
+    URL format: https://page.kakao.com/content/61856924
+    """
+    m_id = re.search(r'/content/(\d+)', url)
+    if not m_id:
+        raise ValueError(f"Cannot extract content ID from Kakao URL: {url}")
+    content_id = m_id.group(1)
+
+    h = {**KR_HEADERS, "Referer": "https://page.kakao.com/", "Accept": "application/json"}
+
+    # 1 ── Try REST API (may work without auth for free series)
+    for api_url in [
+        f"https://api-page.kakao.com/api/v5/store/content/singles?contentId={content_id}&sortType=NEWEST&page=1&size=1",
+        f"https://api-page.kakao.com/api/v6/store/singles?seriesId={content_id}&sort=NEWEST&limit=1",
+    ]:
+        try:
+            r = session.get(api_url, headers=h, timeout=8)
+            if r.status_code == 200:
+                d = r.json()
+                singles = d.get("singles") or d.get("data", {}).get("singles") or []
+                if singles:
+                    ep = singles[0]
+                    ch_num = float(ep.get("seq") or ep.get("no") or 0)
+                    ch_title = ep.get("title") or f"{int(ch_num)}화"
+                    if ch_num > 0:
+                        logger.info(f"Kakao API: content {content_id} Ch.{ch_num}")
+                        return MangaInfo(
+                            title=ep.get("singleTitle") or "Unknown",
+                            cover_url=ep.get("thumbnail") or "",
+                            latest_chapter=ChapterInfo(ch_num, ch_title, url),
+                        )
+        except Exception:
+            pass
+
+    # 2 ── Parse the SSR page
+    resp = session.get(url, headers={**KR_HEADERS, "Referer": "https://page.kakao.com/"}, timeout=TIMEOUT)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # Title from og:title
+    og_title = soup.find("meta", property="og:title")
+    manga_title = og_title["content"].strip() if og_title and og_title.get("content") else "Unknown"
+    manga_title = re.sub(r'\s*[-|]\s*(웹툰|카카오페이지).*$', '', manga_title).strip()
+
+    og_desc = soup.find("meta", property="og:description")
+    desc_text = og_desc["content"] if og_desc and og_desc.get("content") else ""
+
+    # Collect all 화 numbers from the HTML
+    all_nums = [int(n) for n in re.findall(r'(\d+)화', resp.text + " " + desc_text)]
+    # Also look for numbers in JSON-like structures (e.g. "seq":123)
+    seq_nums = [int(n) for n in re.findall(r'"seq"\s*:\s*(\d+)', resp.text)]
+    all_nums += seq_nums
+
+    if all_nums:
+        ch_num   = float(max(all_nums))
+        ch_title = f"{int(ch_num)}화"
+    else:
+        return MangaInfo(title=manga_title, cover_url="", latest_chapter=None)
+
+    m = re.search(r'/content/(\d+)', url)
+    content_id = m.group(1) if m else ""
+    ch_url = f"https://page.kakao.com/content/{content_id}"
+
+    logger.info(f"Kakao Page: {manga_title} — Ch.{ch_num}")
+    return MangaInfo(title=manga_title, cover_url="", latest_chapter=ChapterInfo(ch_num, ch_title, ch_url))
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Public interface
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -631,6 +795,12 @@ def scrape(url: str, session: "requests.Session | None" = None) -> MangaInfo:
             return _scrape_mangadex(url, session)
         elif "ac.qq.com" in url:
             return _scrape_ac_qq(url, session)
+        elif "comic.naver.com" in url:
+            return _scrape_naver_webtoon(url, session)
+        elif "series.naver.com" in url:
+            return _scrape_naver_series(url, session)
+        elif "page.kakao.com" in url:
+            return _scrape_kakao_page(url, session)
 
         return _scrape_generic(url, session)
 
