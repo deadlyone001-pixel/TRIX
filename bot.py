@@ -1,0 +1,273 @@
+import asyncio
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import discord
+from discord import app_commands
+from discord.ext import tasks
+
+# Ensure we're in the right directory
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).parent
+
+LOG_DIR = BASE_DIR / "data"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "discord_bot.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("manga_bot")
+
+from tracker import MangaTracker
+from scraper import scrape, get_session
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+
+if not DISCORD_TOKEN:
+    logger.error("DISCORD_TOKEN environment variable not set. Exiting.")
+    sys.exit(1)
+
+class MangaBot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=discord.Intents.default())
+        self.tree = app_commands.CommandTree(self)
+        self.tracker = MangaTracker()
+
+    async def setup_hook(self):
+        # Start the background task
+        self.poll_manga.start()
+        # Sync slash commands globally
+        await self.tree.sync()
+        logger.info("Slash commands synced.")
+
+    async def on_ready(self):
+        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+
+    @tasks.loop(minutes=5)
+    async def poll_manga(self):
+        entries = self.tracker.get_all()
+        if not entries:
+            logger.debug("No titles being tracked. Skipping poll.")
+            return
+
+        logger.info(f"Polling {len(entries)} tracked titles...")
+        
+        webhook = None
+        if DISCORD_WEBHOOK_URL:
+            import aiohttp
+            # We create a webhook instance. We can use discord.Webhook.from_url 
+            # Note: doing it inside the loop ensures we don't hold persistent sessions unnecessarily, 
+            # or we can pass an aiohttp session.
+            pass # We'll handle it below
+        else:
+            logger.warning("DISCORD_WEBHOOK_URL not set. Skipping notifications.")
+
+        # Scrape concurrently using asyncio.gather and to_thread
+        async def fetch_and_process(entry):
+            session = get_session()
+            try:
+                # Run synchronous scrape function in a separate thread
+                info = await asyncio.to_thread(scrape, entry.url, session)
+                if info.latest_chapter is None:
+                    self.tracker.record_error(entry.url)
+                    return
+
+                is_new = self.tracker.update_chapter(
+                    entry.url,
+                    info.latest_chapter,
+                    info.title,
+                    info.cover_url,
+                )
+
+                if is_new:
+                    logger.info(f"NEW chapter for {info.title}: Ch.{info.latest_chapter.number}")
+                    if DISCORD_WEBHOOK_URL:
+                        import re
+                        from datetime import datetime
+                        
+                        display = entry.display_name or info.title
+                        series_id = "Unknown"
+                        chapter_id = "Unknown"
+                        bot_username = "Manga Notifier"
+                        bot_avatar = None
+                        embed_color = discord.Color.green()
+                        date_str = datetime.now().strftime("%Y.%m.%d")
+                        
+                        if "kuaikanmanhua.com" in entry.url:
+                            bot_username = "Kuaikan Notifier"
+                            bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://www.kuaikanmanhua.com&size=256"
+                            embed_color = discord.Color.from_rgb(51, 127, 213)
+                            
+                            m_series = re.search(r'/topic/(\d+)', entry.url)
+                            if m_series: series_id = m_series.group(1)
+                            
+                            m_ch = re.search(r'/comic/(\d+)', info.latest_chapter.url)
+                            if m_ch: chapter_id = m_ch.group(1)
+                            
+                            date_str = datetime.now().strftime("%m.%d")
+                            
+                        elif "ac.qq.com" in entry.url:
+                            bot_username = "Tencent Notifier"
+                            bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://ac.qq.com&size=256"
+                            embed_color = discord.Color.orange()
+                            
+                            m_series = re.search(r'/id/(\d+)', entry.url)
+                            if m_series: series_id = m_series.group(1)
+                            
+                            m_ch = re.search(r'/cid/(\d+)', info.latest_chapter.url)
+                            if m_ch: chapter_id = m_ch.group(1)
+
+                        embed = discord.Embed(
+                            title=f"New Chapter of {display}",
+                            description=f"{info.latest_chapter.title}",
+                            url=info.latest_chapter.url,
+                            color=embed_color
+                        )
+                        embed.set_footer(text=f"Series ID: {series_id} | Chapter ID: {chapter_id} | Date: {date_str}")
+                        
+                        if info.cover_url:
+                            embed.set_thumbnail(url=info.cover_url)
+                            
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            webhook = discord.Webhook.from_url(DISCORD_WEBHOOK_URL, session=session)
+                            message = await webhook.send(
+                                embed=embed,
+                                username=bot_username,
+                                avatar_url=bot_avatar,
+                                wait=True
+                            )
+                            try:
+                                # Requires the bot to be in the server to react, but webhooks can return messages
+                                # If the bot client is used, we can react:
+                                channel = self.get_channel(message.channel_id)
+                                if channel:
+                                    msg = await channel.fetch_message(message.id)
+                                    await msg.add_reaction("✅")
+                            except Exception as e:
+                                logger.warning(f"Could not add reaction: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Error scraping {entry.url}: {e}")
+                self.tracker.record_error(entry.url)
+
+        await asyncio.gather(*(fetch_and_process(entry) for entry in entries))
+        logger.info("Polling cycle completed.")
+
+    @poll_manga.before_loop
+    async def before_poll(self):
+        await self.wait_until_ready()
+
+
+bot = MangaBot()
+
+@bot.tree.command(name="track", description="Track a new manga")
+@app_commands.describe(url="URL of the manga", display_name="Optional custom name")
+async def track(interaction: discord.Interaction, url: str, display_name: str = ""):
+    if bot.tracker.get(url):
+        await interaction.response.send_message("⚠️ This manga is already being tracked!", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    entry = bot.tracker.add(url, display_name)
+    # Wrap url in <> to prevent Discord's default link preview
+    await interaction.followup.send(f"✅ Now tracking: **{entry.display_name}**\n<{url}>")
+    
+    # Trigger an immediate check for this manga
+    session = get_session()
+    try:
+        info = await asyncio.to_thread(scrape, url, session)
+        if info.latest_chapter:
+            bot.tracker.update_chapter(url, info.latest_chapter, info.title, info.cover_url)
+            
+            embed = discord.Embed(
+                title=info.title,
+                description=f"**Latest Chapter:** {info.latest_chapter.title}\n**Chapter Number:** {info.latest_chapter.number:g}",
+                color=discord.Color.blurple(),
+                url=url
+            )
+            if info.cover_url:
+                embed.set_thumbnail(url=info.cover_url)
+                
+            await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"Initial scrape failed for {url}: {e}")
+
+@bot.tree.command(name="untrack", description="Stop tracking a manga")
+@app_commands.describe(url="URL of the manga to stop tracking")
+async def untrack(interaction: discord.Interaction, url: str):
+    entry = bot.tracker.get(url)
+    if entry:
+        name = entry.display_name
+        bot.tracker.remove(url)
+        await interaction.response.send_message(f"❌ Stopped tracking **{name}**.")
+    else:
+        await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
+
+@bot.tree.command(name="list", description="List all tracked manga categorized by site")
+async def list_manga(interaction: discord.Interaction):
+    entries = bot.tracker.get_all()
+    if not entries:
+        await interaction.response.send_message("No manga are currently being tracked.")
+        return
+        
+    tencent_entries = [e for e in entries if "ac.qq.com" in e.url]
+    kuaikan_entries = [e for e in entries if "kuaikanmanhua.com" in e.url]
+    other_entries = [e for e in entries if e not in tencent_entries and e not in kuaikan_entries]
+    
+    categories = [
+        ("Tencent AC / QQ", tencent_entries, discord.Color.red()),
+        ("Kuaikan", kuaikan_entries, discord.Color.orange()),
+        ("Other Platforms", other_entries, discord.Color.blue())
+    ]
+    
+    embeds = []
+    
+    for cat_name, cat_entries, color in categories:
+        if not cat_entries:
+            continue
+            
+        current_embed = discord.Embed(title=f"Tracked Manga: {cat_name}", color=color)
+        
+        for idx, entry in enumerate(cat_entries):
+            if len(current_embed.fields) == 25:
+                embeds.append(current_embed)
+                current_embed = discord.Embed(title=f"Tracked Manga: {cat_name} (Cont.)", color=color)
+                
+            ch_text = f"Ch. {entry.last_chapter_num:g}" if entry.last_chapter_num > 0 else "Pending"
+            status = entry.user_status.capitalize()
+            current_embed.add_field(name=f"{idx+1}. {entry.display_name}", value=f"Latest: {ch_text} | Status: {status}\n[Link]({entry.url})", inline=False)
+            
+        if len(current_embed.fields) > 0:
+            embeds.append(current_embed)
+            
+    # Discord allows up to 10 embeds per message.
+    await interaction.response.send_message(embeds=embeds[:10])
+
+@bot.tree.command(name="check", description="Force the bot to immediately check all series for new chapters")
+async def force_check(interaction: discord.Interaction):
+    await interaction.response.send_message("🔍 Manually starting a check cycle for all tracked series...")
+    try:
+        # Execute the underlying coroutine manually
+        await bot.poll_manga.coro(bot)
+        await interaction.followup.send("✅ Manual check cycle complete!")
+    except Exception as e:
+        logger.error(f"Manual check failed: {e}")
+        await interaction.followup.send(f"❌ Error during manual check: {e}")
+
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)

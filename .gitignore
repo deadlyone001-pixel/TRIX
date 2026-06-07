@@ -1,28 +1,5 @@
-# Byte-compiled / optimized / DLL files
+.env
 __pycache__/
-*.py[cod]
-*$py.class
-
-# PyInstaller folders and files
-build/
-dist/
-*.spec
-
-# Built executables
-*.exe
-
-# User specific data and logs
+*.log
+data/discord_bot.log
 data/tracked.json
-data/*.log
-
-# Virtual environments
-venv/
-env/
-.venv/
-
-# IDE files
-.vscode/
-.idea/
-
-# Scripts
-setup.ps1

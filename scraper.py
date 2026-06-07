@@ -147,6 +147,44 @@ def _decode_nuxt_script(script_text: str) -> dict[str, object]:
     return var_map
 
 
+def _parse_chapter_number(text: str) -> float | None:
+    # 1. Match standard formats
+    m = re.search(r"(?:第\s*)?(\d+(?:\.\d+)?)\s*(?:话|章|回|集|季)", text)
+    if m:
+        return float(m.group(1))
+        
+    # 2. Match Chinese numerals with 第...话
+    cn = {"零":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10,"百":100,"千":1000,"万":10000}
+    
+    def parse_cn(s):
+        total, cur = 0, 0
+        for ch in s:
+            v = cn.get(ch)
+            if v is None: continue
+            if v >= 10:
+                if cur == 0: cur = 1
+                total += cur * v
+                cur = 0
+            else:
+                cur += v
+        return float(total + cur) if (total + cur) else None
+
+    m_cn = re.search(r"第\s*([一二三四五六七八九十百千万零]+)\s*(?:话|章|回|集)", text)
+    if m_cn:
+        return parse_cn(m_cn.group(1))
+        
+    # 3. Match leading Arabic numbers with separators
+    m_lead = re.match(r"^\s*(?:\[|【|\()?(\d+(?:\.\d+)?)(?:\s|-|\.|:|：|_|】|\]|）|\)|$)", text)
+    if m_lead:
+        return float(m_lead.group(1))
+        
+    # 4. Match leading Chinese numerals with separators
+    m_cn_lead = re.match(r"^\s*(?:\[|【|\()?([一二三四五六七八九十百千万零]+)(?:\s|-|\.|:|：|_|】|\]|）|\)|$)", text)
+    if m_cn_lead:
+        return parse_cn(m_cn_lead.group(1))
+        
+    return None
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Site-specific scrapers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,12 +206,16 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
     # Clean up site suffix
     manga_title = manga_title.split("｜")[0].split("|")[0].strip()
 
+    # Cover image from og:image
+    og_image = soup.find("meta", property="og:image")
+    cover_url = og_image["content"] if og_image and og_image.get("content") else ""
+
     # Try NUXT SSR decoding
     scripts = soup.find_all("script")
     nuxt_script = None
     for s in scripts:
         txt = s.get_text()
-        if "window.__NUXT__" in txt and len(txt) > 10000:
+        if "window.__NUXT__" in txt and len(txt) > 1000:
             nuxt_script = txt
             break
 
@@ -183,6 +225,15 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
             body_start = nuxt_script.index("{", nuxt_script.index(")"))
             body_end = nuxt_script.rfind("}(")
             body = nuxt_script[body_start:body_end]
+
+            # Extract main cover image from topicInfo
+            # Example: topicInfo:{id:F,title:g,cover_image_url:G,...}
+            cover_match = re.search(r"topicInfo:\{[^}]*cover_image_url:(\w+)", body)
+            if cover_match:
+                img_var = cover_match.group(1)
+                real_cover = var_map.get(img_var)
+                if isinstance(real_cover, str) and real_cover.startswith("http"):
+                    cover_url = real_cover
 
             # Find comic entries: {id:VAR, title:VAR, cover_image_url:VAR}
             comic_pattern = re.compile(
@@ -203,12 +254,23 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
                 if valid_entries:
                     latest_id, latest_title = valid_entries[-1]
                     # Extract display chapter number from Chinese title
-                    m_num = re.search(r"第(\d+(?:\.\d+)?)(?:话|章|回|集)", latest_title)
-                    if m_num:
-                        latest_num = float(m_num.group(1))
+                    m_num = _parse_chapter_number(latest_title)
+                    if m_num is not None:
+                        latest_num = m_num
                     else:
-                        # Use total count as proxy
-                        latest_num = float(len(valid_entries))
+                        # Scan backwards to find the last valid chapter number
+                        last_num = 0.0
+                        for i in range(len(valid_entries) - 2, -1, -1):
+                            prev_title = valid_entries[i][1]
+                            m_prev = _parse_chapter_number(prev_title)
+                            if m_prev is not None:
+                                last_num = m_prev
+                                break
+                        if last_num > 0:
+                            # Add a fractional amount so it registers as a new chapter
+                            latest_num = last_num + 0.01
+                        else:
+                            latest_num = float(len(valid_entries))
                     ch_url = f"https://www.kuaikanmanhua.com/web/comic/{latest_id}/"
                     logger.info(
                         f"Kuaikan NUXT decode: {manga_title} — "
@@ -216,7 +278,7 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
                     )
                     return MangaInfo(
                         title=manga_title,
-                        cover_url="",
+                        cover_url=cover_url,
                         latest_chapter=ChapterInfo(latest_num, latest_title, ch_url),
                     )
         except Exception as e:
@@ -524,7 +586,7 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
         html = r.text
     except requests.exceptions.RequestException as e:
         logger.warning(f"Direct connection to ac.qq.com failed ({type(e).__name__}). Using proxy fallback...")
-        proxy_url = f"https://translate.google.com/translate?sl=auto&tl=zh-CN&u={urllib.parse.quote(url)}"
+        proxy_url = f"https://api.allorigins.win/raw?url={urllib.parse.quote(url)}"
         r_proxy = session.get(proxy_url, timeout=15)
         r_proxy.raise_for_status()
         html = r_proxy.text
@@ -543,54 +605,39 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
     if cover_el:
         cover_url = cover_el.get("src", "")
 
-    def _parse_cn_chapter_num(text: str) -> float:
-        """
-        Extract chapter number from Chinese chapter titles.
-        Handles Arabic digits AND Chinese numeral words (九十二→92).
-        """
-        # Arabic digits first (fastest path)
-        m = re.search(r"(\d+(?:\.\d+)?)", text)
-        if m:
-            return float(m.group(1))
-        # Chinese numeral conversion
-        cn = {"零":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,
-              "八":8,"九":9,"十":10,"百":100,"千":1000,"万":10000}
-        total, cur, prev_unit = 0, 0, 1
-        for ch in text:
-            v = cn.get(ch)
-            if v is None:
-                if total or cur:  # stop at non-numeral after finding digits
-                    break
-                continue
-            if v >= 10:
-                cur = max(cur, 1) * v
-                if v >= 1000:
-                    total += cur; cur = 0
-            else:
-                cur += v
-        return float(total + cur) if (total + cur) else 0.0
-
     # Chapters
     chapters = []
+    seen_urls = set()
     for a in soup.select(".works-chapter-item a"):
         ch_title = (a.get("title") or a.get_text(strip=True)).strip()
         ch_href  = a.get("href", "")
         ch_url   = "https://ac.qq.com" + ch_href if ch_href.startswith("/") else ch_href
 
-        # Strip leading manga-title prefix (e.g. "诡浊仙道：第九十二章 傩沈" → "第九十二章 傩沈")
+        if ch_url in seen_urls:
+            continue
+        seen_urls.add(ch_url)
+
+        # Strip leading manga-title prefix
         if manga_title and ch_title.startswith(manga_title):
             ch_title = ch_title[len(manga_title):].lstrip("：: ").strip()
 
-        num = _parse_cn_chapter_num(ch_title)
+        num = _parse_chapter_number(ch_title)
+        if num is None:
+            num = 0.0
         chapters.append(ChapterInfo(num, ch_title, ch_url))
 
     if not chapters:
         logger.warning(f"No chapters found for Tencent AC URL: {url}")
         return MangaInfo(title=manga_title, latest_chapter=None, cover_url=cover_url)
 
-    # Sort numerically; if all nums are 0, preserve list order (last = newest)
+    # Sort numerically; if all nums are 0, fallback to their index
     if any(c.number > 0 for c in chapters):
         chapters.sort(key=lambda c: c.number)
+    else:
+        # No chapters had valid numbers (e.g. they are just titled "Prologue")
+        for i, c in enumerate(chapters):
+            c.number = float(i + 1)
+            
     latest = chapters[-1]
 
     logger.info(
