@@ -57,7 +57,7 @@ class MangaBot(discord.Client):
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=3)
     async def poll_manga(self):
         entries = self.tracker.get_all()
         if not entries:
