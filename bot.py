@@ -203,7 +203,18 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
     entry = bot.tracker.add(url, display_name, interaction.channel_id, ping_str)
     
     if already_tracked:
-        await interaction.followup.send(f"✅ Subscribed this channel to **{entry.display_name}**!")
+        if entry.last_chapter_num > -1:
+            embed = discord.Embed(
+                title=entry.display_name,
+                description=f"**Latest Chapter:** {entry.last_chapter_title}\n**Chapter Number:** {entry.last_chapter_num:g}",
+                color=discord.Color.blurple(),
+                url=entry.url
+            )
+            if entry.cover_url:
+                embed.set_thumbnail(url=entry.cover_url)
+            await interaction.followup.send(f"✅ Subscribed this channel to **{entry.display_name}**!", embed=embed)
+        else:
+            await interaction.followup.send(f"✅ Subscribed this channel to **{entry.display_name}**!")
         return
         
     await interaction.followup.send(f"✅ Now tracking: **{entry.display_name}**\n<{url}>")

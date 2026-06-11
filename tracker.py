@@ -100,6 +100,18 @@ class TrackedManga:
         )
 
 
+def _normalize_url(url: str) -> str:
+    from urllib.parse import urlparse, urlunparse
+    url = url.strip()
+    if not url.startswith("http"):
+        url = "https://" + url
+    parsed = urlparse(url)
+    path = parsed.path
+    if path.endswith("/"):
+        path = path[:-1]
+    return urlunparse(("https", parsed.netloc, path, parsed.params, "", ""))
+
+
 class MangaTracker:
     """Manages the list of tracked manga and persists state to disk."""
 
@@ -115,7 +127,7 @@ class MangaTracker:
             try:
                 raw = json.loads(self.data_file.read_text(encoding="utf-8"))
                 self._manga = {
-                    item["url"]: TrackedManga.from_dict(item)
+                    _normalize_url(item["url"]): TrackedManga.from_dict({**item, "url": _normalize_url(item["url"])})
                     for item in raw
                 }
                 logger.info(f"Loaded {len(self._manga)} tracked titles from {self.data_file}")
@@ -136,6 +148,7 @@ class MangaTracker:
 
     def add(self, url: str, display_name: str = "", channel_id: int = 0, ping_id: str = "") -> TrackedManga:
         """Add a new manga to track. Returns the TrackedManga object."""
+        url = _normalize_url(url)
         if url in self._manga:
             if channel_id != 0:
                 self._manga[url].subscribers[str(channel_id)] = ping_id
@@ -188,9 +201,11 @@ class MangaTracker:
             if ch_str in entry.subscribers:
                 del entry.subscribers[ch_str]
                 self.save()
+                return True
         return False
 
     def remove(self, url: str):
+        url = _normalize_url(url)
         if url in self._manga:
             del self._manga[url]
             self.save()
@@ -199,11 +214,11 @@ class MangaTracker:
         return list(self._manga.values())
 
     def get(self, url: str) -> Optional[TrackedManga]:
-        return self._manga.get(url)
+        return self._manga.get(_normalize_url(url))
 
     def set_user_status(self, url: str, status: str):
         """Set the manual status ('unknown', 'active', 'hiatus') and save."""
-        entry = self._manga.get(url)
+        entry = self.get(url)
         if entry:
             entry.user_status = status
             self.save()
@@ -221,6 +236,7 @@ class MangaTracker:
         Update the stored chapter for a manga.
         Returns True if this is a NEW chapter (number is strictly higher than stored).
         """
+        url = _normalize_url(url)
         entry = self._manga.get(url)
         if entry is None:
             return False
@@ -256,7 +272,7 @@ class MangaTracker:
         return is_new
 
     def record_error(self, url: str):
-        entry = self._manga.get(url)
+        entry = self.get(url)
         if entry:
             entry.error_count += 1
             entry.last_checked = time.time()
