@@ -160,6 +160,15 @@ class MangaBot(discord.Client):
                                     await msg.add_reaction("✅")
                             except Exception as e:
                                 logger.warning(f"Could not add reaction: {e}")
+                                
+                        if entry.channel_id:
+                            try:
+                                target_channel = self.get_channel(entry.channel_id)
+                                if target_channel:
+                                    content = entry.ping_id if entry.ping_id else None
+                                    await target_channel.send(content=content, embed=embed)
+                            except Exception as e:
+                                logger.error(f"Failed to send specific channel notification for {entry.url}: {e}")
                         
             except Exception as e:
                 logger.error(f"Error scraping {entry.url}: {e}")
@@ -176,14 +185,22 @@ class MangaBot(discord.Client):
 bot = MangaBot()
 
 @bot.tree.command(name="track", description="Track a new manga")
-@app_commands.describe(url="URL of the manga", display_name="Optional custom name")
-async def track(interaction: discord.Interaction, url: str, display_name: str = ""):
+@app_commands.describe(url="URL of the manga", display_name="Optional custom name", role_to_ping="Optional role to notify", user_to_ping="Optional user to notify")
+async def track(interaction: discord.Interaction, url: str, display_name: str = "", role_to_ping: discord.Role = None, user_to_ping: discord.Member = None):
     if bot.tracker.get(url):
         await interaction.response.send_message("⚠️ This manga is already being tracked!", ephemeral=True)
         return
 
     await interaction.response.defer()
-    entry = bot.tracker.add(url, display_name)
+    
+    ping_str = ""
+    if role_to_ping:
+        ping_str += role_to_ping.mention + " "
+    if user_to_ping:
+        ping_str += user_to_ping.mention + " "
+    ping_str = ping_str.strip()
+
+    entry = bot.tracker.add(url, display_name, interaction.channel_id, ping_str)
     # Wrap url in <> to prevent Discord's default link preview
     await interaction.followup.send(f"✅ Now tracking: **{entry.display_name}**\n<{url}>")
     

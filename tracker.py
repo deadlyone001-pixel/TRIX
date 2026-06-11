@@ -40,6 +40,8 @@ class TrackedManga:
     has_custom_title: bool = False
     history: list = field(default_factory=list)
     user_status: str = "unknown"   # "unknown" | "active" | "hiatus" — set manually by user
+    channel_id: int = 0
+    ping_id: str = ""
 
     # ── derived helpers ───────────────────────────────────────────────────────
 
@@ -87,6 +89,8 @@ class TrackedManga:
             has_custom_title=d.get("has_custom_title", False),
             history=d.get("history", []),
             user_status=d.get("user_status", "unknown"),
+            channel_id=d.get("channel_id", 0),
+            ping_id=d.get("ping_id", ""),
         )
 
 
@@ -122,9 +126,12 @@ class MangaTracker:
 
     # ── CRUD ─────────────────────────────────────────────────────────────────
 
-    def add(self, url: str, display_name: str = "") -> TrackedManga:
+    def add(self, url: str, display_name: str = "", channel_id: int = 0, ping_id: str = "") -> TrackedManga:
         """Add a new manga to track. Returns the TrackedManga object."""
         if url in self._manga:
+            self._manga[url].channel_id = channel_id
+            self._manga[url].ping_id = ping_id
+            self.save()
             return self._manga[url]
         entry = TrackedManga(
             url=url,
@@ -134,6 +141,8 @@ class MangaTracker:
             last_chapter_url="",
             title_resolved=bool(display_name),  # user set a name → consider resolved
             has_custom_title=bool(display_name),
+            channel_id=channel_id,
+            ping_id=ping_id,
         )
         self._manga[url] = entry
         self.save()
