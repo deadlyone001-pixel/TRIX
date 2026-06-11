@@ -179,16 +179,13 @@ class MangaTracker:
         return True
 
     def remove_subscriber(self, url: str, channel_id: int) -> bool:
-        """Removes a subscriber. Returns True if the manga was completely removed from the tracker."""
+        """Removes a subscriber. No longer auto-deletes to protect webhook."""
         entry = self.get(url)
         if entry:
             ch_str = str(channel_id)
             if ch_str in entry.subscribers:
                 del entry.subscribers[ch_str]
                 self.save()
-            if not entry.subscribers:
-                self.remove(url)
-                return True
         return False
 
     def remove(self, url: str):

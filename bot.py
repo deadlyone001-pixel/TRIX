@@ -235,17 +235,25 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
     except Exception as e:
         logger.error(f"Initial scrape failed for {url}: {e}")
 
-@bot.tree.command(name="untrack", description="Stop tracking a manga")
+@bot.tree.command(name="untrack", description="Stop tracking a manga in this specific channel")
 @app_commands.describe(url="URL of the manga to stop tracking")
 async def untrack(interaction: discord.Interaction, url: str):
     entry = bot.tracker.get(url)
     if entry:
         name = entry.display_name
-        fully_removed = bot.tracker.remove_subscriber(url, interaction.channel_id)
-        if fully_removed:
-            await interaction.response.send_message(f"❌ Stopped tracking **{name}** globally.")
-        else:
-            await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel.")
+        bot.tracker.remove_subscriber(url, interaction.channel_id)
+        await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel. (Still tracked by Webhook)")
+    else:
+        await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
+
+@bot.tree.command(name="global_untrack", description="Completely delete a manga from the bot's memory globally")
+@app_commands.describe(url="URL of the manga to delete completely")
+async def global_untrack(interaction: discord.Interaction, url: str):
+    entry = bot.tracker.get(url)
+    if entry:
+        name = entry.display_name
+        bot.tracker.remove(url)
+        await interaction.response.send_message(f"🗑️ Permanently stopped tracking **{name}** everywhere.")
     else:
         await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
 
