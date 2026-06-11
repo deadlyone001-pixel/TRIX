@@ -35,7 +35,6 @@ from tracker import MangaTracker
 from scraper import scrape, get_session
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 if not DISCORD_TOKEN:
     logger.error("DISCORD_TOKEN environment variable not set. Exiting.")
@@ -65,16 +64,6 @@ class MangaBot(discord.Client):
             return
 
         logger.info(f"Polling {len(entries)} tracked titles...")
-        
-        webhook = None
-        if DISCORD_WEBHOOK_URL:
-            import aiohttp
-            # We create a webhook instance. We can use discord.Webhook.from_url 
-            # Note: doing it inside the loop ensures we don't hold persistent sessions unnecessarily, 
-            # or we can pass an aiohttp session.
-            pass # We'll handle it below
-        else:
-            logger.warning("DISCORD_WEBHOOK_URL not set. Skipping notifications.")
 
         # Scrape concurrently using asyncio.gather and to_thread
         async def fetch_and_process(entry):
@@ -141,42 +130,22 @@ class MangaBot(discord.Client):
                     if info.cover_url:
                         embed.set_thumbnail(url=info.cover_url)
                         
-                    if DISCORD_WEBHOOK_URL:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as session:
-                            webhook = discord.Webhook.from_url(DISCORD_WEBHOOK_URL, session=session)
-                            message = await webhook.send(
-                                embed=embed,
-                                username=bot_username,
-                                avatar_url=bot_avatar,
-                                wait=True
-                            )
+                    if entry.subscribers:
+                        for ch_id_str, ping_id in entry.subscribers.items():
                             try:
-                                # Requires the bot to be in the server to react, but webhooks can return messages
-                                # If the bot client is used, we can react:
-                                channel = self.get_channel(message.channel_id)
-                                if channel:
-                                    msg = await channel.fetch_message(message.id)
-                                    await msg.add_reaction("✅")
+                                target_channel = self.get_channel(int(ch_id_str))
+                                if target_channel:
+                                    content = ping_id if ping_id else None
+                                    
+                                    channel_alias = entry.aliases.get(ch_id_str)
+                                    if channel_alias:
+                                        custom_embed = embed.copy()
+                                        custom_embed.title = f"New Chapter of {channel_alias}"
+                                        await target_channel.send(content=content, embed=custom_embed)
+                                    else:
+                                        await target_channel.send(content=content, embed=embed)
                             except Exception as e:
-                                logger.warning(f"Could not add reaction: {e}")
-                                
-                        if entry.subscribers:
-                            for ch_id_str, ping_id in entry.subscribers.items():
-                                try:
-                                    target_channel = self.get_channel(int(ch_id_str))
-                                    if target_channel:
-                                        content = ping_id if ping_id else None
-                                        
-                                        channel_alias = entry.aliases.get(ch_id_str)
-                                        if channel_alias:
-                                            custom_embed = embed.copy()
-                                            custom_embed.title = f"New Chapter of {channel_alias}"
-                                            await target_channel.send(content=content, embed=custom_embed)
-                                        else:
-                                            await target_channel.send(content=content, embed=embed)
-                                except Exception as e:
-                                    logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
+                                logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
                         
             except Exception as e:
                 logger.error(f"Error scraping {entry.url}: {e}")
