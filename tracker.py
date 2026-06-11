@@ -126,9 +126,11 @@ class MangaTracker:
     def save(self):
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
         data = [m.to_dict() for m in self._manga.values()]
-        self.data_file.write_text(
+        tmp_file = self.data_file.with_suffix('.tmp')
+        tmp_file.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        tmp_file.replace(self.data_file)
 
     # ── CRUD ─────────────────────────────────────────────────────────────────
 

@@ -131,7 +131,7 @@ class MangaBot(discord.Client):
                         embed.set_thumbnail(url=info.cover_url)
                         
                     if entry.subscribers:
-                        for ch_id_str, ping_id in entry.subscribers.items():
+                        for ch_id_str, ping_id in list(entry.subscribers.items()):
                             try:
                                 target_channel = self.get_channel(int(ch_id_str))
                                 if target_channel:
@@ -144,6 +144,12 @@ class MangaBot(discord.Client):
                                         await target_channel.send(content=content, embed=custom_embed)
                                     else:
                                         await target_channel.send(content=content, embed=embed)
+                            except discord.Forbidden:
+                                logger.error(f"Missing permissions for channel {ch_id_str}. Removing subscriber.")
+                                self.tracker.remove_subscriber(entry.url, int(ch_id_str))
+                            except discord.NotFound:
+                                logger.error(f"Channel {ch_id_str} deleted. Removing subscriber.")
+                                self.tracker.remove_subscriber(entry.url, int(ch_id_str))
                             except Exception as e:
                                 logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
                         
@@ -168,6 +174,19 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
 
     await interaction.response.defer()
     
+    if not already_tracked:
+        from scraper import scrape, get_session
+        session = get_session()
+        try:
+            info = await asyncio.to_thread(scrape, url, session)
+            if not info or not info.latest_chapter:
+                await interaction.followup.send("⚠️ I couldn't track that manga. Make sure the URL is valid and the site is supported!")
+                return
+        except Exception as e:
+            logger.error(f"Initial scrape failed for {url}: {e}")
+            await interaction.followup.send("⚠️ An error occurred while trying to verify that URL. Please check the URL and try again.")
+            return
+
     ping_str = ""
     if role_to_ping:
         ping_str += role_to_ping.mention + " "
@@ -181,28 +200,19 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
         await interaction.followup.send(f"✅ Subscribed this channel to **{entry.display_name}**!")
         return
         
-    # Wrap url in <> to prevent Discord's default link preview
     await interaction.followup.send(f"✅ Now tracking: **{entry.display_name}**\n<{url}>")
     
-    # Trigger an immediate check for this manga
-    session = get_session()
-    try:
-        info = await asyncio.to_thread(scrape, url, session)
-        if info.latest_chapter:
-            bot.tracker.update_chapter(url, info.latest_chapter, info.title, info.cover_url)
-            
-            embed = discord.Embed(
-                title=info.title,
-                description=f"**Latest Chapter:** {info.latest_chapter.title}\n**Chapter Number:** {info.latest_chapter.number:g}",
-                color=discord.Color.blurple(),
-                url=url
-            )
-            if info.cover_url:
-                embed.set_thumbnail(url=info.cover_url)
-                
-            await interaction.followup.send(embed=embed)
-    except Exception as e:
-        logger.error(f"Initial scrape failed for {url}: {e}")
+    bot.tracker.update_chapter(url, info.latest_chapter, info.title, info.cover_url)
+    embed = discord.Embed(
+        title=info.title,
+        description=f"**Latest Chapter:** {info.latest_chapter.title}\n**Chapter Number:** {info.latest_chapter.number:g}",
+        color=discord.Color.blurple(),
+        url=url
+    )
+    if info.cover_url:
+        embed.set_thumbnail(url=info.cover_url)
+        
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="untrack", description="Stop tracking a manga in this specific channel")
 @app_commands.describe(url="URL of the manga to stop tracking")
