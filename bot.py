@@ -65,12 +65,15 @@ class MangaBot(discord.Client):
 
         logger.info(f"Polling {len(entries)} tracked titles...")
 
+        semaphore = asyncio.Semaphore(5)
+
         # Scrape concurrently using asyncio.gather and to_thread
         async def fetch_and_process(entry):
             session = get_session()
             try:
                 # Run synchronous scrape function in a separate thread
-                info = await asyncio.to_thread(scrape, entry.url, session)
+                async with semaphore:
+                    info = await asyncio.to_thread(scrape, entry.url, session)
                 if info.latest_chapter is None:
                     self.tracker.record_error(entry.url)
                     return
@@ -152,6 +155,9 @@ class MangaBot(discord.Client):
                                 self.tracker.remove_subscriber(entry.url, int(ch_id_str))
                             except Exception as e:
                                 logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
+                            
+                            # Tiny delay to prevent triggering Discord's anti-spam rate limits
+                            await asyncio.sleep(0.5)
                         
             except Exception as e:
                 logger.error(f"Error scraping {entry.url}: {e}")
