@@ -161,14 +161,15 @@ class MangaBot(discord.Client):
                             except Exception as e:
                                 logger.warning(f"Could not add reaction: {e}")
                                 
-                        if entry.channel_id:
-                            try:
-                                target_channel = self.get_channel(entry.channel_id)
-                                if target_channel:
-                                    content = entry.ping_id if entry.ping_id else None
-                                    await target_channel.send(content=content, embed=embed)
-                            except Exception as e:
-                                logger.error(f"Failed to send specific channel notification for {entry.url}: {e}")
+                        if entry.subscribers:
+                            for ch_id_str, ping_id in entry.subscribers.items():
+                                try:
+                                    target_channel = self.get_channel(int(ch_id_str))
+                                    if target_channel:
+                                        content = ping_id if ping_id else None
+                                        await target_channel.send(content=content, embed=embed)
+                                except Exception as e:
+                                    logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
                         
             except Exception as e:
                 logger.error(f"Error scraping {entry.url}: {e}")
@@ -230,8 +231,11 @@ async def untrack(interaction: discord.Interaction, url: str):
     entry = bot.tracker.get(url)
     if entry:
         name = entry.display_name
-        bot.tracker.remove(url)
-        await interaction.response.send_message(f"❌ Stopped tracking **{name}**.")
+        fully_removed = bot.tracker.remove_subscriber(url, interaction.channel_id)
+        if fully_removed:
+            await interaction.response.send_message(f"❌ Stopped tracking **{name}** globally.")
+        else:
+            await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel.")
     else:
         await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
 

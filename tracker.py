@@ -40,8 +40,7 @@ class TrackedManga:
     has_custom_title: bool = False
     history: list = field(default_factory=list)
     user_status: str = "unknown"   # "unknown" | "active" | "hiatus" — set manually by user
-    channel_id: int = 0
-    ping_id: str = ""
+    subscribers: dict = field(default_factory=dict) # str(channel_id) -> ping_id
 
     # ── derived helpers ───────────────────────────────────────────────────────
 
@@ -74,6 +73,12 @@ class TrackedManga:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TrackedManga":
+        subs = d.get("subscribers", {})
+        # Backwards compatibility
+        legacy_channel = d.get("channel_id", 0)
+        if legacy_channel != 0:
+            subs[str(legacy_channel)] = d.get("ping_id", "")
+            
         return cls(
             url=d["url"],
             display_name=d.get("display_name", "Unknown"),
@@ -89,8 +94,7 @@ class TrackedManga:
             has_custom_title=d.get("has_custom_title", False),
             history=d.get("history", []),
             user_status=d.get("user_status", "unknown"),
-            channel_id=d.get("channel_id", 0),
-            ping_id=d.get("ping_id", ""),
+            subscribers=subs,
         )
 
 
@@ -129,9 +133,9 @@ class MangaTracker:
     def add(self, url: str, display_name: str = "", channel_id: int = 0, ping_id: str = "") -> TrackedManga:
         """Add a new manga to track. Returns the TrackedManga object."""
         if url in self._manga:
-            self._manga[url].channel_id = channel_id
-            self._manga[url].ping_id = ping_id
-            self.save()
+            if channel_id != 0:
+                self._manga[url].subscribers[str(channel_id)] = ping_id
+                self.save()
             return self._manga[url]
         entry = TrackedManga(
             url=url,
@@ -141,12 +145,25 @@ class MangaTracker:
             last_chapter_url="",
             title_resolved=bool(display_name),  # user set a name → consider resolved
             has_custom_title=bool(display_name),
-            channel_id=channel_id,
-            ping_id=ping_id,
         )
+        if channel_id != 0:
+            entry.subscribers[str(channel_id)] = ping_id
         self._manga[url] = entry
         self.save()
         return entry
+
+    def remove_subscriber(self, url: str, channel_id: int) -> bool:
+        """Removes a subscriber. Returns True if the manga was completely removed from the tracker."""
+        entry = self.get(url)
+        if entry:
+            ch_str = str(channel_id)
+            if ch_str in entry.subscribers:
+                del entry.subscribers[ch_str]
+                self.save()
+            if not entry.subscribers:
+                self.remove(url)
+                return True
+        return False
 
     def remove(self, url: str):
         if url in self._manga:
