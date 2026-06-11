@@ -41,6 +41,7 @@ class TrackedManga:
     history: list = field(default_factory=list)
     user_status: str = "unknown"   # "unknown" | "active" | "hiatus" — set manually by user
     subscribers: dict = field(default_factory=dict) # str(channel_id) -> ping_id
+    aliases: dict = field(default_factory=dict) # str(channel_id) -> display_name
 
     # ── derived helpers ───────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ class TrackedManga:
             history=d.get("history", []),
             user_status=d.get("user_status", "unknown"),
             subscribers=subs,
+            aliases=d.get("aliases", {}),
         )
 
 
@@ -135,6 +137,12 @@ class MangaTracker:
         if url in self._manga:
             if channel_id != 0:
                 self._manga[url].subscribers[str(channel_id)] = ping_id
+                if display_name:
+                    self._manga[url].aliases[str(channel_id)] = display_name
+                    # Also set global title if it wasn't resolved yet
+                    if not self._manga[url].title_resolved:
+                        self._manga[url].display_name = display_name
+                        self._manga[url].title_resolved = True
                 self.save()
             return self._manga[url]
         entry = TrackedManga(
@@ -148,6 +156,8 @@ class MangaTracker:
         )
         if channel_id != 0:
             entry.subscribers[str(channel_id)] = ping_id
+            if display_name:
+                entry.aliases[str(channel_id)] = display_name
         self._manga[url] = entry
         self.save()
         return entry

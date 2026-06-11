@@ -167,7 +167,14 @@ class MangaBot(discord.Client):
                                     target_channel = self.get_channel(int(ch_id_str))
                                     if target_channel:
                                         content = ping_id if ping_id else None
-                                        await target_channel.send(content=content, embed=embed)
+                                        
+                                        channel_alias = entry.aliases.get(ch_id_str)
+                                        if channel_alias:
+                                            custom_embed = embed.copy()
+                                            custom_embed.title = f"New Chapter of {channel_alias}"
+                                            await target_channel.send(content=content, embed=custom_embed)
+                                        else:
+                                            await target_channel.send(content=content, embed=embed)
                                 except Exception as e:
                                     logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
                         
