@@ -246,11 +246,15 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
                 if isinstance(real_cover, str) and real_cover.startswith("http"):
                     cover_url = real_cover
 
+            # Narrow down to just the comics array if possible to avoid grabbing recommended series
+            comics_match = re.search(r'comics:\[(.*?)\]', body)
+            search_area = comics_match.group(1) if comics_match else body
+
             # Find comic entries: {id:VAR, title:VAR, cover_image_url:VAR}
             comic_pattern = re.compile(
                 r"\{id:(\w+),title:(\w+),cover_image_url:(\w+)"
             )
-            entries = comic_pattern.findall(body)
+            entries = comic_pattern.findall(search_area)
 
             if entries:
                 # Use list ORDER as canonical (Kuaikan: oldest first → newest last)
