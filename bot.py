@@ -57,8 +57,12 @@ class MangaBot(discord.Client):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
     @tasks.loop(minutes=3)
-    async def poll_manga(self):
-        entries = self.tracker.get_all()
+    async def poll_manga(self, specific_entries=None):
+        if specific_entries is not None:
+            entries = specific_entries
+        else:
+            entries = self.tracker.get_all()
+            
         if not entries:
             logger.debug("No titles being tracked. Skipping poll.")
             return
@@ -335,13 +339,21 @@ async def list_manga(interaction: discord.Interaction):
     # Discord allows up to 10 embeds per message.
     await interaction.response.send_message(embeds=embeds[:10])
 
-@bot.tree.command(name="check", description="Force the bot to immediately check all series for new chapters")
+@bot.tree.command(name="check", description="Force the bot to immediately check this channel's series for new chapters")
 async def force_check(interaction: discord.Interaction):
-    await interaction.response.send_message("🔍 Manually starting a check cycle for all tracked series...")
+    all_entries = bot.tracker.get_all()
+    ch_str = str(interaction.channel_id)
+    entries = [e for e in all_entries if ch_str in e.subscribers]
+    
+    if not entries:
+        await interaction.response.send_message("❌ No manga are currently being tracked in this channel.")
+        return
+
+    await interaction.response.send_message(f"🔍 Manually starting a check cycle for {len(entries)} tracked series in this channel...")
     try:
-        # Execute the underlying coroutine manually
-        await bot.poll_manga.coro(bot)
-        await interaction.followup.send("✅ Manual check cycle complete!")
+        # Execute the underlying coroutine manually with specific entries
+        await bot.poll_manga.coro(bot, specific_entries=entries)
+        await interaction.followup.send("✅ Manual check cycle complete for this channel!")
     except Exception as e:
         logger.error(f"Manual check failed: {e}")
         await interaction.followup.send(f"❌ Error during manual check: {e}")
