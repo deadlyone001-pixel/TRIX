@@ -95,53 +95,53 @@ class MangaBot(discord.Client):
 
                 if is_new:
                     logger.info(f"NEW chapter for {info.title}: Ch.{info.latest_chapter.number}")
-                    if DISCORD_WEBHOOK_URL:
-                        import re
-                        from datetime import datetime
+                    import re
+                    from datetime import datetime
+                    
+                    display = entry.display_name or info.title
+                    series_id = "Unknown"
+                    chapter_id = "Unknown"
+                    bot_username = "Manga Notifier"
+                    bot_avatar = None
+                    embed_color = discord.Color.green()
+                    date_str = datetime.now().strftime("%Y.%m.%d")
+                    
+                    if "kuaikanmanhua.com" in entry.url:
+                        bot_username = "Kuaikan Notifier"
+                        bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://www.kuaikanmanhua.com&size=256"
+                        embed_color = discord.Color.from_rgb(51, 127, 213)
                         
-                        display = entry.display_name or info.title
-                        series_id = "Unknown"
-                        chapter_id = "Unknown"
-                        bot_username = "Manga Notifier"
-                        bot_avatar = None
-                        embed_color = discord.Color.green()
-                        date_str = datetime.now().strftime("%Y.%m.%d")
+                        m_series = re.search(r'/topic/(\d+)', entry.url)
+                        if m_series: series_id = m_series.group(1)
                         
-                        if "kuaikanmanhua.com" in entry.url:
-                            bot_username = "Kuaikan Notifier"
-                            bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://www.kuaikanmanhua.com&size=256"
-                            embed_color = discord.Color.from_rgb(51, 127, 213)
-                            
-                            m_series = re.search(r'/topic/(\d+)', entry.url)
-                            if m_series: series_id = m_series.group(1)
-                            
-                            m_ch = re.search(r'/comic/(\d+)', info.latest_chapter.url)
-                            if m_ch: chapter_id = m_ch.group(1)
-                            
-                            date_str = datetime.now().strftime("%m.%d")
-                            
-                        elif "ac.qq.com" in entry.url:
-                            bot_username = "Tencent Notifier"
-                            bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://ac.qq.com&size=256"
-                            embed_color = discord.Color.orange()
-                            
-                            m_series = re.search(r'/id/(\d+)', entry.url)
-                            if m_series: series_id = m_series.group(1)
-                            
-                            m_ch = re.search(r'/cid/(\d+)', info.latest_chapter.url)
-                            if m_ch: chapter_id = m_ch.group(1)
+                        m_ch = re.search(r'/comic/(\d+)', info.latest_chapter.url)
+                        if m_ch: chapter_id = m_ch.group(1)
+                        
+                        date_str = datetime.now().strftime("%m.%d")
+                        
+                    elif "ac.qq.com" in entry.url:
+                        bot_username = "Tencent Notifier"
+                        bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://ac.qq.com&size=256"
+                        embed_color = discord.Color.orange()
+                        
+                        m_series = re.search(r'/id/(\d+)', entry.url)
+                        if m_series: series_id = m_series.group(1)
+                        
+                        m_ch = re.search(r'/cid/(\d+)', info.latest_chapter.url)
+                        if m_ch: chapter_id = m_ch.group(1)
 
-                        embed = discord.Embed(
-                            title=f"New Chapter of {display}",
-                            description=f"{info.latest_chapter.title}",
-                            url=info.latest_chapter.url,
-                            color=embed_color
-                        )
-                        embed.set_footer(text=f"Series ID: {series_id} | Chapter ID: {chapter_id} | Date: {date_str}")
+                    embed = discord.Embed(
+                        title=f"New Chapter of {display}",
+                        description=f"{info.latest_chapter.title}",
+                        url=info.latest_chapter.url,
+                        color=embed_color
+                    )
+                    embed.set_footer(text=f"Series ID: {series_id} | Chapter ID: {chapter_id} | Date: {date_str}")
+                    
+                    if info.cover_url:
+                        embed.set_thumbnail(url=info.cover_url)
                         
-                        if info.cover_url:
-                            embed.set_thumbnail(url=info.cover_url)
-                            
+                    if DISCORD_WEBHOOK_URL:
                         import aiohttp
                         async with aiohttp.ClientSession() as session:
                             webhook = discord.Webhook.from_url(DISCORD_WEBHOOK_URL, session=session)
