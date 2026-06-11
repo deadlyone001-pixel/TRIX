@@ -188,9 +188,7 @@ bot = MangaBot()
 @bot.tree.command(name="track", description="Track a new manga")
 @app_commands.describe(url="URL of the manga", display_name="Optional custom name", role_to_ping="Optional role to notify", user_to_ping="Optional user to notify")
 async def track(interaction: discord.Interaction, url: str, display_name: str = "", role_to_ping: discord.Role = None, user_to_ping: discord.Member = None):
-    if bot.tracker.get(url):
-        await interaction.response.send_message("⚠️ This manga is already being tracked!", ephemeral=True)
-        return
+    already_tracked = bot.tracker.get(url) is not None
 
     await interaction.response.defer()
     
@@ -202,6 +200,11 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
     ping_str = ping_str.strip()
 
     entry = bot.tracker.add(url, display_name, interaction.channel_id, ping_str)
+    
+    if already_tracked:
+        await interaction.followup.send(f"✅ Subscribed this channel to **{entry.display_name}**!")
+        return
+        
     # Wrap url in <> to prevent Discord's default link preview
     await interaction.followup.send(f"✅ Now tracking: **{entry.display_name}**\n<{url}>")
     
@@ -238,6 +241,28 @@ async def untrack(interaction: discord.Interaction, url: str):
             await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel.")
     else:
         await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
+
+@bot.tree.command(name="add_ping", description="Stack an additional role or user ping onto an existing tracked manga")
+@app_commands.describe(url="URL of the tracked manga", role_to_ping="Role to add", user_to_ping="User to add")
+async def add_ping(interaction: discord.Interaction, url: str, role_to_ping: discord.Role = None, user_to_ping: discord.Member = None):
+    entry = bot.tracker.get(url)
+    if not entry:
+        await interaction.response.send_message("⚠️ That URL is not currently being tracked. Use `/track` first!", ephemeral=True)
+        return
+        
+    ping_str = ""
+    if role_to_ping:
+        ping_str += role_to_ping.mention + " "
+    if user_to_ping:
+        ping_str += user_to_ping.mention + " "
+    ping_str = ping_str.strip()
+    
+    if not ping_str:
+        await interaction.response.send_message("⚠️ You must specify at least one role or user to add.", ephemeral=True)
+        return
+        
+    bot.tracker.add_ping(url, interaction.channel_id, ping_str)
+    await interaction.response.send_message(f"✅ Added pings to **{entry.display_name}** for this channel!")
 
 @bot.tree.command(name="list", description="List all tracked manga categorized by site")
 async def list_manga(interaction: discord.Interaction):

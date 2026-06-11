@@ -152,6 +152,22 @@ class MangaTracker:
         self.save()
         return entry
 
+    def add_ping(self, url: str, channel_id: int, ping_id: str) -> bool:
+        """Appends a ping to the subscriber string for the given channel. Returns True if successful."""
+        entry = self.get(url)
+        if not entry:
+            return False
+            
+        ch_str = str(channel_id)
+        if ch_str not in entry.subscribers:
+            entry.subscribers[ch_str] = ping_id
+        else:
+            existing = entry.subscribers[ch_str]
+            if ping_id and ping_id not in existing:
+                entry.subscribers[ch_str] = f"{existing} {ping_id}".strip()
+        self.save()
+        return True
+
     def remove_subscriber(self, url: str, channel_id: int) -> bool:
         """Removes a subscriber. Returns True if the manga was completely removed from the tracker."""
         entry = self.get(url)
