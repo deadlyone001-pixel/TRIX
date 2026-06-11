@@ -246,9 +246,15 @@ async def untrack(interaction: discord.Interaction, url: str):
     else:
         await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
 
+OWNER_IDS = [881105899224186890, 1255605799422787738]
+
 @bot.tree.command(name="global_untrack", description="Completely delete a manga from the bot's memory globally")
 @app_commands.describe(url="URL of the manga to delete completely")
 async def global_untrack(interaction: discord.Interaction, url: str):
+    if interaction.user.id not in OWNER_IDS:
+        await interaction.response.send_message("⛔ **Access Denied.** Only the bot owners can use this command.", ephemeral=True)
+        return
+        
     entry = bot.tracker.get(url)
     if entry:
         name = entry.display_name
