@@ -237,8 +237,19 @@ async def untrack(interaction: discord.Interaction, url: str):
     entry = bot.tracker.get(url)
     if entry:
         name = entry.display_name
-        bot.tracker.remove_subscriber(url, interaction.channel_id)
-        await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel. (Still tracked by Webhook)")
+        ch_str = str(interaction.channel_id)
+        if ch_str in entry.subscribers:
+            bot.tracker.remove_subscriber(url, interaction.channel_id)
+            
+            # Check if any channels are still listening
+            updated_entry = bot.tracker.get(url)
+            if updated_entry and len(updated_entry.subscribers) == 0:
+                bot.tracker.remove(url)
+                await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel. (Zero channels listening, completely deleted to save resources)")
+            else:
+                await interaction.response.send_message(f"❌ Unsubscribed **{name}** from this channel.")
+        else:
+            await interaction.response.send_message("⚠️ This channel is not subscribed to that manga.", ephemeral=True)
     else:
         await interaction.response.send_message("⚠️ That URL is not currently being tracked.", ephemeral=True)
 
@@ -281,11 +292,14 @@ async def add_ping(interaction: discord.Interaction, url: str, role_to_ping: dis
     bot.tracker.add_ping(url, interaction.channel_id, ping_str)
     await interaction.response.send_message(f"✅ Added pings to **{entry.display_name}** for this channel!")
 
-@bot.tree.command(name="list", description="List all tracked manga categorized by site")
+@bot.tree.command(name="list", description="List all tracked manga for this channel categorized by site")
 async def list_manga(interaction: discord.Interaction):
-    entries = bot.tracker.get_all()
+    all_entries = bot.tracker.get_all()
+    ch_str = str(interaction.channel_id)
+    entries = [e for e in all_entries if ch_str in e.subscribers]
+    
     if not entries:
-        await interaction.response.send_message("No manga are currently being tracked.")
+        await interaction.response.send_message("No manga are currently being tracked in this channel.")
         return
         
     tencent_entries = [e for e in entries if "ac.qq.com" in e.url]
