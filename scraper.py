@@ -148,42 +148,53 @@ def _decode_nuxt_script(script_text: str) -> dict[str, object]:
 
 
 def _parse_chapter_number(text: str) -> float | None:
+    result = None
+    
     # 1. Match standard formats
     m = re.search(r"(?:第\s*)?(\d+(?:\.\d+)?)\s*(?:话|章|回|集|季)", text)
     if m:
-        return float(m.group(1))
+        result = float(m.group(1))
+    else:
+        # 2. Match Chinese numerals with 第...话
+        cn = {"零":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10,"百":100,"千":1000,"万":10000}
         
-    # 2. Match Chinese numerals with 第...话
-    cn = {"零":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10,"百":100,"千":1000,"万":10000}
-    
-    def parse_cn(s):
-        total, cur = 0, 0
-        for ch in s:
-            v = cn.get(ch)
-            if v is None: continue
-            if v >= 10:
-                if cur == 0: cur = 1
-                total += cur * v
-                cur = 0
-            else:
-                cur += v
-        return float(total + cur) if (total + cur) else None
+        def parse_cn(s):
+            total, cur = 0, 0
+            for ch in s:
+                v = cn.get(ch)
+                if v is None: continue
+                if v >= 10:
+                    if cur == 0: cur = 1
+                    total += cur * v
+                    cur = 0
+                else:
+                    cur += v
+            return float(total + cur) if (total + cur) else None
 
-    m_cn = re.search(r"第\s*([一二三四五六七八九十百千万零]+)\s*(?:话|章|回|集)", text)
-    if m_cn:
-        return parse_cn(m_cn.group(1))
-        
-    # 3. Match leading Arabic numbers with separators
-    m_lead = re.match(r"^\s*(?:\[|【|\()?(\d+(?:\.\d+)?)(?:\s|-|\.|:|：|_|】|\]|）|\)|$)", text)
-    if m_lead:
-        return float(m_lead.group(1))
-        
-    # 4. Match leading Chinese numerals with separators
-    m_cn_lead = re.match(r"^\s*(?:\[|【|\()?([一二三四五六七八九十百千万零]+)(?:\s|-|\.|:|：|_|】|\]|）|\)|$)", text)
-    if m_cn_lead:
-        return parse_cn(m_cn_lead.group(1))
-        
-    return None
+        m_cn = re.search(r"第\s*([一二三四五六七八九十百千万零]+)\s*(?:话|章|回|集)", text)
+        if m_cn:
+            result = parse_cn(m_cn.group(1))
+        else:
+            # 3. Match leading Arabic numbers with separators
+            m_lead = re.match(r"^\s*(?:\[|【|\()?(\d+(?:\.\d+)?)(?:\s|-|\.|:|：|_|】|\]|）|\)|$)", text)
+            if m_lead:
+                result = float(m_lead.group(1))
+            else:
+                # 4. Match leading Chinese numerals with separators
+                m_cn_lead = re.match(r"^\s*(?:\[|【|\()?([一二三四五六七八九十百千万零]+)(?:\s|-|\.|:|：|_|】|\]|）|\)|$)", text)
+                if m_cn_lead:
+                    result = parse_cn(m_cn_lead.group(1))
+                    
+    if result is not None:
+        # Detect split chapter parts and add a decimal so the tracker sees them as strictly increasing
+        if "上" in text or "(1)" in text or "（1）" in text or "-1" in text:
+            result += 0.1
+        elif "中" in text or "(2)" in text or "（2）" in text or "-2" in text:
+            result += 0.2
+        elif "下" in text or "(3)" in text or "（3）" in text or "-3" in text:
+            result += 0.3
+            
+    return result
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Site-specific scrapers
@@ -245,11 +256,15 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
                 # Use list ORDER as canonical (Kuaikan: oldest first → newest last)
                 # Each entry in NUXT has unique id; last entry = latest chapter
                 valid_entries = []
+                seen_ids = set()
                 for e in entries:
                     ch_id = var_map.get(e[0])
                     ch_title = var_map.get(e[1])
                     if isinstance(ch_title, str) and isinstance(ch_id, (int, float)):
-                        valid_entries.append((ch_id, ch_title))
+                        # Deduplicate by ID and ignore the main comic title banner
+                        if ch_id not in seen_ids and ch_title != manga_title:
+                            seen_ids.add(ch_id)
+                            valid_entries.append((ch_id, ch_title))
 
                 if valid_entries:
                     latest_id, latest_title = valid_entries[-1]
