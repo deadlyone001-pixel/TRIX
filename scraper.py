@@ -239,7 +239,7 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
 
             # Extract main cover image from topicInfo
             # Example: topicInfo:{id:F,title:g,cover_image_url:G,...}
-            cover_match = re.search(r"topicInfo:\{[^}]*cover_image_url:(\w+)", body)
+            cover_match = re.search(r"topicInfo:\{[^}]*cover_image_url:([\w$]+)", body)
             if cover_match:
                 img_var = cover_match.group(1)
                 real_cover = var_map.get(img_var)
@@ -252,7 +252,7 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
 
             # Find comic entries: {id:VAR, title:VAR, cover_image_url:VAR}
             comic_pattern = re.compile(
-                r"\{id:(\w+),title:(\w+),cover_image_url:(\w+)"
+                r"\{id:([\w$]+),title:([\w$]+),cover_image_url:([\w$]+)"
             )
             entries = comic_pattern.findall(search_area)
 
