@@ -78,87 +78,88 @@ class MangaBot(discord.Client):
                 # Run synchronous scrape function in a separate thread
                 async with semaphore:
                     info = await asyncio.to_thread(scrape, entry.url, session)
-                if info.latest_chapter is None:
+                if not info.chapters:
                     self.tracker.record_error(entry.url)
                     return
 
-                is_new = self.tracker.update_chapter(
+                new_chapters = self.tracker.update_chapter(
                     entry.url,
-                    info.latest_chapter,
+                    info.chapters,
                     info.title,
                     info.cover_url,
                 )
 
-                if is_new:
-                    logger.info(f"NEW chapter for {info.title}: Ch.{info.latest_chapter.number}")
+                if new_chapters:
                     import re
                     from datetime import datetime
                     
-                    display = entry.display_name or info.title
-                    series_id = "Unknown"
-                    chapter_id = "Unknown"
-                    bot_username = "Manga Notifier"
-                    bot_avatar = None
-                    embed_color = discord.Color.green()
-                    date_str = datetime.now().strftime("%Y.%m.%d")
-                    
-                    if "kuaikanmanhua.com" in entry.url:
-                        bot_username = "Kuaikan Notifier"
-                        bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://www.kuaikanmanhua.com&size=256"
-                        embed_color = discord.Color.from_rgb(51, 127, 213)
+                    for chapter in new_chapters:
+                        logger.info(f"NEW chapter for {info.title}: Ch.{chapter.number}")
+                        display = entry.display_name or info.title
+                        series_id = "Unknown"
+                        chapter_id = "Unknown"
+                        bot_username = "Manga Notifier"
+                        bot_avatar = None
+                        embed_color = discord.Color.green()
+                        date_str = datetime.now().strftime("%Y.%m.%d")
                         
-                        m_series = re.search(r'/topic/(\d+)', entry.url)
-                        if m_series: series_id = m_series.group(1)
-                        
-                        m_ch = re.search(r'/comic/(\d+)', info.latest_chapter.url)
-                        if m_ch: chapter_id = m_ch.group(1)
-                        
-                        date_str = datetime.now().strftime("%m.%d")
-                        
-                    elif "ac.qq.com" in entry.url:
-                        bot_username = "Tencent Notifier"
-                        bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://ac.qq.com&size=256"
-                        embed_color = discord.Color.orange()
-                        
-                        m_series = re.search(r'/id/(\d+)', entry.url)
-                        if m_series: series_id = m_series.group(1)
-                        
-                        m_ch = re.search(r'/cid/(\d+)', info.latest_chapter.url)
-                        if m_ch: chapter_id = m_ch.group(1)
+                        if "kuaikanmanhua.com" in entry.url:
+                            bot_username = "Kuaikan Notifier"
+                            bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://www.kuaikanmanhua.com&size=256"
+                            embed_color = discord.Color.from_rgb(51, 127, 213)
+                            
+                            m_series = re.search(r'/topic/(\d+)', entry.url)
+                            if m_series: series_id = m_series.group(1)
+                            
+                            m_ch = re.search(r'/comic/(\d+)', chapter.url)
+                            if m_ch: chapter_id = m_ch.group(1)
+                            
+                            date_str = datetime.now().strftime("%m.%d")
+                            
+                        elif "ac.qq.com" in entry.url:
+                            bot_username = "Tencent Notifier"
+                            bot_avatar = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://ac.qq.com&size=256"
+                            embed_color = discord.Color.orange()
+                            
+                            m_series = re.search(r'/id/(\d+)', entry.url)
+                            if m_series: series_id = m_series.group(1)
+                            
+                            m_ch = re.search(r'/cid/(\d+)', chapter.url)
+                            if m_ch: chapter_id = m_ch.group(1)
 
-                    embed = discord.Embed(
-                        title=f"New Chapter of {display}",
-                        description=f"{info.latest_chapter.title}",
-                        url=info.latest_chapter.url,
-                        color=embed_color
-                    )
-                    embed.set_footer(text=f"Series ID: {series_id} | Chapter ID: {chapter_id} | Date: {date_str}")
-                    
-                    if info.cover_url:
-                        embed.set_thumbnail(url=info.cover_url)
+                        embed = discord.Embed(
+                            title=f"New Chapter of {display}",
+                            description=f"{chapter.title}",
+                            url=chapter.url,
+                            color=embed_color
+                        )
+                        embed.set_footer(text=f"Series ID: {series_id} | Chapter ID: {chapter_id} | Date: {date_str}")
                         
-                    if entry.subscribers:
-                        for ch_id_str, ping_id in list(entry.subscribers.items()):
-                            try:
-                                target_channel = self.get_channel(int(ch_id_str))
-                                if target_channel:
-                                    content = ping_id if ping_id else None
-                                    
-                                    channel_alias = entry.aliases.get(ch_id_str)
-                                    if channel_alias:
-                                        custom_embed = embed.copy()
-                                        custom_embed.title = f"New Chapter of {channel_alias}"
-                                        await target_channel.send(content=content, embed=custom_embed)
-                                    else:
-                                        await target_channel.send(content=content, embed=embed)
-                            except discord.Forbidden:
-                                logger.error(f"Missing permissions for channel {ch_id_str}. Removing subscriber.")
-                                self.tracker.remove_subscriber(entry.url, int(ch_id_str))
-                            except discord.NotFound:
-                                logger.error(f"Channel {ch_id_str} deleted. Removing subscriber.")
-                                self.tracker.remove_subscriber(entry.url, int(ch_id_str))
-                            except Exception as e:
-                                logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
+                        if info.cover_url:
+                            embed.set_thumbnail(url=info.cover_url)
+                            
+                        if entry.subscribers:
+                            for ch_id_str, ping_id in list(entry.subscribers.items()):
+                                try:
+                                    target_channel = self.get_channel(int(ch_id_str))
+                                    if target_channel:
+                                        content = ping_id if ping_id else None
+                                        
+                                        channel_alias = entry.aliases.get(ch_id_str)
+                                        if channel_alias:
+                                            custom_embed = embed.copy()
+                                            custom_embed.title = f"New Chapter of {channel_alias}"
+                                            await target_channel.send(content=content, embed=custom_embed)
+                                        else:
+                                            await target_channel.send(content=content, embed=embed)
+                                except discord.Forbidden:
+                                    logger.error(f"Missing permissions for channel {ch_id_str}. Removing subscriber.")
+                                    self.tracker.remove_subscriber(entry.url, int(ch_id_str))
+                                except discord.NotFound:
+                                    logger.error(f"Channel {ch_id_str} deleted. Removing subscriber.")
+                                    self.tracker.remove_subscriber(entry.url, int(ch_id_str))
+                                except Exception as e:
+                                    logger.error(f"Failed to send specific channel notification for {entry.url} to {ch_id_str}: {e}")
                             
                             # Tiny delay to prevent triggering Discord's anti-spam rate limits
                             await asyncio.sleep(0.5)

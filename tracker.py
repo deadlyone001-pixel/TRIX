@@ -42,6 +42,7 @@ class TrackedManga:
     user_status: str = "unknown"   # "unknown" | "active" | "hiatus" — set manually by user
     subscribers: dict = field(default_factory=dict) # str(channel_id) -> ping_id
     aliases: dict = field(default_factory=dict) # str(channel_id) -> display_name
+    seen_chapters: list = field(default_factory=list) # To handle out of order chapters
 
     # ── derived helpers ───────────────────────────────────────────────────────
 
@@ -80,10 +81,19 @@ class TrackedManga:
         if legacy_channel != 0:
             subs[str(legacy_channel)] = d.get("ping_id", "")
             
+        seen_caps = d.get("seen_chapters", [])
+        last_num = d.get("last_chapter_num", -1)
+        
+        # If migrating from old save where seen_chapters didn't exist,
+        # pretend we've seen all chapters up to the last one to prevent 
+        # spamming the user with older chapters during the first scan.
+        if not seen_caps and last_num > 0:
+            seen_caps = [float(i) for i in range(max(0, int(last_num) - 50), int(last_num) + 1)]
+
         return cls(
             url=d["url"],
             display_name=d.get("display_name", "Unknown"),
-            last_chapter_num=d.get("last_chapter_num", -1),
+            last_chapter_num=last_num,
             last_chapter_title=d.get("last_chapter_title", ""),
             last_chapter_url=d.get("last_chapter_url", ""),
             added_at=d.get("added_at", time.time()),
@@ -97,6 +107,7 @@ class TrackedManga:
             user_status=d.get("user_status", "unknown"),
             subscribers=subs,
             aliases=d.get("aliases", {}),
+            seen_chapters=seen_caps,
         )
 
 
@@ -228,36 +239,65 @@ class MangaTracker:
     def update_chapter(
         self,
         url: str,
-        chapter: ChapterInfo,
+        chapters: list[ChapterInfo],
         manga_title: str,
         cover_url: str,
-    ) -> bool:
+    ) -> list[ChapterInfo]:
         """
-        Update the stored chapter for a manga.
-        Returns True if this is a NEW chapter (number is strictly higher than stored).
+        Update the stored chapters for a manga.
+        Returns a list of NEW chapters (number is strictly higher than stored).
         """
         url = _normalize_url(url)
         entry = self._manga.get(url)
-        if entry is None:
-            return False
+        if entry is None or not chapters:
+            return []
 
-        is_new = chapter.number > entry.last_chapter_num
+        new_chapters = []
+        for ch in chapters:
+            is_new = False
+            if ch.number > entry.last_chapter_num:
+                is_new = True
+            elif ch.number >= entry.last_chapter_num - 20: # Slightly older but might be out of order
+                if ch.number not in entry.seen_chapters:
+                    # Also make sure it's not in the small history fallback
+                    if ch.number not in [h.get("num") for h in entry.history]:
+                        is_new = True
 
-        if entry.last_chapter_num > 10000 and chapter.number < 10000:
-            is_new = True
+            # Special case for Bilibili huge chapters
+            if entry.last_chapter_num > 10000 and ch.number < 10000:
+                is_new = True
+                
+            if is_new:
+                new_chapters.append(ch)
 
-        if is_new:
-            entry.last_chapter_num = chapter.number
-            entry.last_chapter_title = chapter.title
-            entry.last_chapter_url = chapter.url
+        if new_chapters:
+            # Deduplicate by chapter number to prevent spam if a site lists a chapter multiple times
+            unique_chapters = {}
+            for ch in new_chapters:
+                unique_chapters[ch.number] = ch
+            new_chapters = list(unique_chapters.values())
+            
+            new_chapters.sort(key=lambda c: c.number)
+            latest = new_chapters[-1]
+
+            entry.last_chapter_num = latest.number
+            entry.last_chapter_title = latest.title
+            entry.last_chapter_url = latest.url
             entry.last_chapter_found_at = time.time()
-            entry.history.insert(0, {
-                "num": chapter.number,
-                "title": chapter.title,
-                "url": chapter.url,
-                "time": time.time(),
-            })
+            
+            for ch in new_chapters:
+                entry.seen_chapters.append(ch.number)
+                entry.history.insert(0, {
+                    "num": ch.number,
+                    "title": ch.title,
+                    "url": ch.url,
+                    "time": time.time(),
+                })
             entry.history = entry.history[:5]
+            
+            # Keep seen_chapters bounded so it doesn't grow infinitely large over years
+            if len(entry.seen_chapters) > 200:
+                entry.seen_chapters = entry.seen_chapters[-150:]
 
         # Always update metadata
         if manga_title and manga_title not in ("Unknown", ""):
@@ -269,7 +309,7 @@ class MangaTracker:
         entry.last_checked = time.time()
         entry.error_count = 0
         self.save()
-        return is_new
+        return new_chapters
 
     def record_error(self, url: str):
         entry = self.get(url)

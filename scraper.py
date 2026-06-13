@@ -51,13 +51,13 @@ class ChapterInfo:
 
 class MangaInfo:
     """Holds the scraped state of a manga series."""
-    def __init__(self, title: str, cover_url: str, latest_chapter: "ChapterInfo | None"):
+    def __init__(self, title: str, cover_url: str, chapters: list["ChapterInfo"]):
         self.title = title
         self.cover_url = cover_url
-        self.latest_chapter = latest_chapter
+        self.chapters = chapters
 
     def __repr__(self):
-        return f"MangaInfo(title={self.title!r}, latest={self.latest_chapter})"
+        return f"MangaInfo(title={self.title!r}, chapters={len(self.chapters)})"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -271,34 +271,30 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
                             valid_entries.append((ch_id, ch_title))
 
                 if valid_entries:
-                    latest_id, latest_title = valid_entries[-1]
-                    # Extract display chapter number from Chinese title
-                    m_num = _parse_chapter_number(latest_title)
-                    if m_num is not None:
-                        latest_num = m_num
-                    else:
-                        # Scan backwards to find the last valid chapter number
-                        last_num = 0.0
-                        for i in range(len(valid_entries) - 2, -1, -1):
-                            prev_title = valid_entries[i][1]
-                            m_prev = _parse_chapter_number(prev_title)
-                            if m_prev is not None:
-                                last_num = m_prev
-                                break
-                        if last_num > 0:
-                            # Add a fractional amount so it registers as a new chapter
-                            latest_num = last_num + 0.01
+                    chapters = []
+                    last_num = 0.0
+                    for ch_id, ch_title in valid_entries:
+                        m_num = _parse_chapter_number(ch_title)
+                        if m_num is not None:
+                            curr_num = m_num
+                            last_num = m_num
                         else:
-                            latest_num = float(len(valid_entries))
-                    ch_url = f"https://www.kuaikanmanhua.com/web/comic/{latest_id}/"
+                            if last_num > 0:
+                                last_num += 0.01
+                                curr_num = last_num
+                            else:
+                                curr_num = len(chapters) + 1.0
+                        ch_url = f"https://www.kuaikanmanhua.com/web/comic/{ch_id}/"
+                        chapters.append(ChapterInfo(curr_num, ch_title, ch_url))
+
                     logger.info(
                         f"Kuaikan NUXT decode: {manga_title} — "
-                        f"Ch.{latest_num}: {latest_title} (total {len(valid_entries)})"
+                        f"Latest: Ch.{chapters[-1].number}: {chapters[-1].title} (total {len(chapters)})"
                     )
                     return MangaInfo(
                         title=manga_title,
                         cover_url=cover_url,
-                        latest_chapter=ChapterInfo(latest_num, latest_title, ch_url),
+                        chapters=chapters,
                     )
         except Exception as e:
             logger.warning(f"NUXT decode failed for {url}: {e}")
@@ -372,77 +368,38 @@ def _scrape_bilibili_manga(url: str, session: requests.Session) -> MangaInfo:
 
                 ep_list = season.get("ep_list", [])
 
-                # ── pick the best episode ─────────────────────────────────────
-                # Some comics have last_ord=0 (e.g. locked/preview), so we
-                # walk ep_list and prefer the entry whose ord matches last_ord,
-                # then fall back to highest ord, then highest list-index.
-                latest_ep = None
+                chapters = []
                 if ep_list:
-                    if last_ord:
-                        for ep in ep_list:
-                            if ep.get("ord") == last_ord:
-                                latest_ep = ep
-                                break
-                    if latest_ep is None:
-                        # highest ord wins; 0-ord entries sorted last
-                        latest_ep = max(ep_list, key=lambda e: e.get("ord", 0))
-                    # If ALL ords are 0 (some series store numbers only in
-                    # short_title like "第92章"), use the first item in the
-                    # list which Bilibili orders newest→oldest.
-                    if latest_ep.get("ord", 0) == 0 and ep_list:
-                        latest_ep = ep_list[0]
-
-                def _parse_ch_num(text: str) -> float:
-                    """Extract a chapter number from arbitrary Chinese/English text."""
-                    # Convert Chinese numerals for common cases handled inline
-                    cn_map = {"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,
-                              "八":8,"九":9,"十":10,"百":100,"千":1000}
-                    # Arabic digits first
-                    m_ar = re.search(r"(\d+(?:\.\d+)?)", text)
-                    if m_ar:
-                        return float(m_ar.group(1))
-                    # Try naive Chinese numeral conversion (handles 九十二 → 92)
-                    total, cur = 0, 0
-                    for ch in text:
-                        v = cn_map.get(ch)
-                        if v is None:
-                            continue
-                        if v >= 10:
-                            cur = max(cur, 1) * v
-                            if v == 1000:
-                                total += cur; cur = 0
+                    # Reverse so it's chronological
+                    for ep in reversed(ep_list):
+                        raw_ord  = ep.get("ord", 0)
+                        short    = ep.get("short_title") or last_short or ""
+                        title_pt = ep.get("title") or ""
+                        ch_title = f"{short}{title_pt}".strip() or f"Chapter {int(raw_ord)}"
+                        ch_url   = f"https://manga.bilibili.com/mc{comic_id}/{ep.get('id', '')}"
+    
+                        if raw_ord and raw_ord > 0:
+                            ch_num = float(raw_ord)
                         else:
-                            cur += v
-                    total += cur
-                    return float(total) if total else 0.0
+                            ch_num = _parse_chapter_number(short) or _parse_chapter_number(title_pt)
+                            if not ch_num:
+                                ch_num = float(len(chapters) + 1)
+                        chapters.append(ChapterInfo(ch_num, ch_title, ch_url))
 
-                if latest_ep:
-                    raw_ord  = latest_ep.get("ord", 0)
-                    short    = latest_ep.get("short_title") or last_short or ""
-                    title_pt = latest_ep.get("title") or ""
-                    ch_title = f"{short}{title_pt}".strip() or f"Chapter {int(raw_ord)}"
-                    ch_url   = f"https://manga.bilibili.com/mc{comic_id}/{latest_ep.get('id', '')}"
-
-                    # Determine the best numeric chapter number
-                    if raw_ord and raw_ord > 0:
-                        ch_num = float(raw_ord)
-                    else:
-                        ch_num = _parse_ch_num(short) or _parse_ch_num(title_pt)
-                        if not ch_num:
-                            ch_num = float(len(ep_list))
-                else:
-                    ch_num   = float(last_ord) if last_ord else float(len(ep_list))
+                if not chapters:
+                    ch_num   = float(last_ord) if last_ord else 1.0
                     ch_title = last_short or f"Chapter {int(ch_num)}"
                     ch_url   = url
+                    chapters.append(ChapterInfo(ch_num, ch_title, ch_url))
 
                 logger.info(
                     f"Bilibili manga (mobile SSR): {manga_title} — "
-                    f"Ch.{ch_num}: {ch_title}"
+                    f"Latest: Ch.{chapters[-1].number}: {chapters[-1].title}"
                 )
                 return MangaInfo(
                     title=manga_title,
                     cover_url=cover,
-                    latest_chapter=ChapterInfo(ch_num, ch_title, ch_url),
+                    chapters=chapters,
                 )
 
         except Exception as e:
@@ -465,11 +422,11 @@ def _scrape_bilibili_manga(url: str, session: requests.Session) -> MangaInfo:
             return MangaInfo(
                 title=manga_title,
                 cover_url="",
-                latest_chapter=ChapterInfo(ch_num, ch_title, url),
+                chapters=[ChapterInfo(ch_num, ch_title, url)],
             )
 
     logger.warning(f"Bilibili: could not extract chapter for {url}")
-    return MangaInfo(title=manga_title, cover_url="", latest_chapter=None)
+    return MangaInfo(title=manga_title, cover_url="", chapters=[])
 
 
 
@@ -499,11 +456,11 @@ def _scrape_mangadex(url: str, session: requests.Session) -> MangaInfo:
         or next(iter(title_map.values()), "Unknown")
     )
 
-    # Get latest chapter
+    # Get recent chapters
     feed_resp = session.get(
         f"{api_base}/manga/{manga_id}/feed",
         params={
-            "limit": 1,
+            "limit": 20,
             "order[chapter]": "desc",
             "translatedLanguage[]": ["en"],
         },
@@ -512,22 +469,23 @@ def _scrape_mangadex(url: str, session: requests.Session) -> MangaInfo:
     )
     feed_resp.raise_for_status()
     feed_data = feed_resp.json()
-    chapters = feed_data.get("data", [])
+    ch_data_list = feed_data.get("data", [])
 
-    if not chapters:
-        return MangaInfo(title=manga_title, cover_url="", latest_chapter=None)
-
-    ch_attrs = chapters[0].get("attributes", {})
-    ch_num_str = ch_attrs.get("chapter") or "0"
-    ch_num = float(ch_num_str) if ch_num_str else 0.0
-    ch_title = ch_attrs.get("title") or f"Chapter {ch_num}"
-    ch_id = chapters[0].get("id", "")
-    ch_url = f"https://mangadex.org/chapter/{ch_id}"
+    chapters = []
+    # Reverse to make chronological (oldest to newest among the recent ones)
+    for ch_data in reversed(ch_data_list):
+        ch_attrs = ch_data.get("attributes", {})
+        ch_num_str = ch_attrs.get("chapter") or "0"
+        ch_num = float(ch_num_str) if ch_num_str else 0.0
+        ch_title = ch_attrs.get("title") or f"Chapter {ch_num}"
+        ch_id = ch_data.get("id", "")
+        ch_url = f"https://mangadex.org/chapter/{ch_id}"
+        chapters.append(ChapterInfo(ch_num, ch_title, ch_url))
 
     return MangaInfo(
         title=manga_title,
         cover_url="",
-        latest_chapter=ChapterInfo(ch_num, ch_title, ch_url),
+        chapters=chapters,
     )
 
 
@@ -566,8 +524,7 @@ def _scrape_generic(
     ]
     combined = re.compile("|".join(chapter_patterns), re.IGNORECASE)
 
-    best_num = -1.0
-    latest = None
+    chapters = []
     parsed_base = urlparse(url)
 
     for a in soup.find_all("a", href=True):
@@ -579,19 +536,20 @@ def _scrape_generic(
             if num_str:
                 try:
                     num = float(num_str)
-                    if num > best_num:
-                        best_num = num
-                        ch_title = text if text else f"Chapter {num}"
-                        ch_url = href
-                        if ch_url.startswith("/"):
-                            ch_url = f"{parsed_base.scheme}://{parsed_base.netloc}{ch_url}"
-                        elif not ch_url.startswith("http"):
-                            ch_url = url + "/" + ch_url
-                        latest = ChapterInfo(num, ch_title, ch_url)
+                    ch_title = text if text else f"Chapter {num}"
+                    ch_url = href
+                    if ch_url.startswith("/"):
+                        ch_url = f"{parsed_base.scheme}://{parsed_base.netloc}{ch_url}"
+                    elif not ch_url.startswith("http"):
+                        ch_url = url + "/" + ch_url
+                    chapters.append(ChapterInfo(num, ch_title, ch_url))
                 except ValueError:
                     pass
 
-    return MangaInfo(title=manga_title, cover_url=cover, latest_chapter=latest)
+    # Sort chronologically by number
+    chapters.sort(key=lambda x: x.number)
+
+    return MangaInfo(title=manga_title, cover_url=cover, chapters=chapters)
 
 
 def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
@@ -647,7 +605,7 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
 
     if not chapters:
         logger.warning(f"No chapters found for Tencent AC URL: {url}")
-        return MangaInfo(title=manga_title, latest_chapter=None, cover_url=cover_url)
+        return MangaInfo(title=manga_title, chapters=[], cover_url=cover_url)
 
     # Sort numerically; if all nums are 0, fallback to their index
     if any(c.number > 0 for c in chapters):
@@ -661,11 +619,11 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
 
     logger.info(
         f"Tencent AC: {manga_title} — "
-        f"Ch.{latest.number:.0f}: {latest.title} "
+        f"Latest: Ch.{latest.number:.0f}: {latest.title} "
         f"(total {len(chapters)})"
     )
 
-    return MangaInfo(title=manga_title, latest_chapter=latest, cover_url=cover_url)
+    return MangaInfo(title=manga_title, chapters=chapters, cover_url=cover_url)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -701,7 +659,7 @@ def _scrape_naver_webtoon(url: str, session: requests.Session) -> MangaInfo:
         soup = BeautifulSoup(page.text, "lxml")
         og = soup.find("meta", property="og:title")
         title = og["content"].split(" : ")[0].strip() if og else "Unknown"
-        return MangaInfo(title=title, cover_url="", latest_chapter=None)
+        return MangaInfo(title=title, cover_url="", chapters=[])
 
     latest = articles[0]
     # volumeNo is the episode sequence number; subtitle is like "159화"
@@ -725,7 +683,7 @@ def _scrape_naver_webtoon(url: str, session: requests.Session) -> MangaInfo:
         pass
 
     logger.info(f"Naver Webtoon: {title} — Ch.{ch_num}: {subtitle}")
-    return MangaInfo(title=title, cover_url="", latest_chapter=ChapterInfo(ch_num, subtitle, ch_url))
+    return MangaInfo(title=title, cover_url="", chapters=[ChapterInfo(ch_num, subtitle, ch_url)])
 
 
 def _scrape_naver_series(url: str, session: requests.Session) -> MangaInfo:
@@ -746,7 +704,7 @@ def _scrape_naver_series(url: str, session: requests.Session) -> MangaInfo:
     # All 화 numbers on the page — the maximum is the latest chapter
     ep_nums = re.findall(r'(\d+)화', resp.text)
     if not ep_nums:
-        return MangaInfo(title=manga_title, cover_url="", latest_chapter=None)
+        return MangaInfo(title=manga_title, cover_url="", chapters=[])
 
     ch_num   = float(max(int(n) for n in ep_nums))
     ch_title = f"{int(ch_num)}화"
@@ -755,7 +713,7 @@ def _scrape_naver_series(url: str, session: requests.Session) -> MangaInfo:
     ch_url = f"https://series.naver.com/comic/viewer.series?productNo={product_no}"
 
     logger.info(f"Naver Series: {manga_title} — Ch.{ch_num}")
-    return MangaInfo(title=manga_title, cover_url="", latest_chapter=ChapterInfo(ch_num, ch_title, ch_url))
+    return MangaInfo(title=manga_title, cover_url="", chapters=[ChapterInfo(ch_num, ch_title, ch_url)])
 
 
 def _scrape_kakao_page(url: str, session: requests.Session) -> MangaInfo:
@@ -824,7 +782,7 @@ def _scrape_kakao_page(url: str, session: requests.Session) -> MangaInfo:
                     return MangaInfo(
                         title=manga_title,
                         cover_url="",
-                        latest_chapter=ChapterInfo(ch_num, ch_title, ch_url),
+                        chapters=[ChapterInfo(ch_num, ch_title, ch_url)],
                     )
         except Exception as e:
             logger.warning(f"Kakao __NEXT_DATA__ parse failed: {e}")
@@ -838,9 +796,9 @@ def _scrape_kakao_page(url: str, session: requests.Session) -> MangaInfo:
         content_id = m_id.group(1) if m_id else ""
         ch_url = f"https://page.kakao.com/content/{content_id}"
         logger.info(f"Kakao Page (fallback): {manga_title} — Ch.{ch_num}")
-        return MangaInfo(title=manga_title, cover_url="", latest_chapter=ChapterInfo(ch_num, ch_title, ch_url))
+        return MangaInfo(title=manga_title, cover_url="", chapters=[ChapterInfo(ch_num, ch_title, ch_url)])
 
-    return MangaInfo(title=manga_title, cover_url="", latest_chapter=None)
+    return MangaInfo(title=manga_title, cover_url="", chapters=[])
 
 
 
