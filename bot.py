@@ -149,9 +149,39 @@ class MangaBot(discord.Client):
                                         if channel_alias:
                                             custom_embed = embed.copy()
                                             custom_embed.title = f"New Chapter of {channel_alias}"
-                                            await target_channel.send(content=content, embed=custom_embed)
+                                            embed_to_send = custom_embed
                                         else:
-                                            await target_channel.send(content=content, embed=embed)
+                                            embed_to_send = embed
+                                            
+                                        # Use a webhook to change the avatar and username
+                                        webhook = None
+                                        channel_for_webhook = target_channel
+                                        thread = discord.utils.MISSING
+                                        
+                                        if isinstance(target_channel, discord.Thread):
+                                            channel_for_webhook = target_channel.parent
+                                            thread = target_channel
+                                            
+                                        if isinstance(channel_for_webhook, discord.TextChannel) or isinstance(channel_for_webhook, discord.ForumChannel) or str(channel_for_webhook.type) == 'news':
+                                            try:
+                                                webhooks = await channel_for_webhook.webhooks()
+                                                webhook = next((w for w in webhooks if w.user == self.user), None)
+                                                if not webhook:
+                                                    webhook = await channel_for_webhook.create_webhook(name="Manga Notifier")
+                                            except discord.Forbidden:
+                                                pass # fallback to standard send
+                                                
+                                        if webhook:
+                                            await webhook.send(
+                                                content=content, 
+                                                embed=embed_to_send, 
+                                                username=bot_username, 
+                                                avatar_url=bot_avatar,
+                                                thread=thread
+                                            )
+                                        else:
+                                            await target_channel.send(content=content, embed=embed_to_send)
+                                            
                                 except discord.Forbidden:
                                     logger.error(f"Missing permissions for channel {ch_id_str}. Removing subscriber.")
                                     self.tracker.remove_subscriber(entry.url, int(ch_id_str))
