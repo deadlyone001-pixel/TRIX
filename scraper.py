@@ -296,6 +296,15 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
                         cover_url=cover_url,
                         chapters=chapters,
                     )
+            
+            # If we successfully parsed NUXT but there were 0 chapters, return empty instead of falling back to HTML
+            if comics_match is not None:
+                logger.info(f"Kuaikan NUXT decode: {manga_title} — 0 chapters published")
+                return MangaInfo(
+                    title=manga_title,
+                    cover_url=cover_url,
+                    chapters=[]
+                )
         except Exception as e:
             logger.warning(f"NUXT decode failed for {url}: {e}")
 
@@ -798,35 +807,13 @@ def _scrape_kakao_page(url: str, session: requests.Session) -> MangaInfo:
         logger.info(f"Kakao Page (fallback): {manga_title} — Ch.{ch_num}")
         return MangaInfo(title=manga_title, cover_url="", chapters=[ChapterInfo(ch_num, ch_title, ch_url)])
 
-    return MangaInfo(title=manga_title, cover_url="", chapters=[])
 
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Public interface
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    return s
-
-
-def scrape(url: str, session: "requests.Session | None" = None) -> MangaInfo:
-    """Dispatch to the appropriate scraper based on domain."""
-    if session is None:
-        session = get_session()
-
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower()
-
-    logger.info(f"Scraping: {url} (domain={domain})")
-
+def scrape(url: str, session: requests.Session) -> MangaInfo | None:
+    """Master scrape function that routes to the correct parser based on URL."""
     try:
         if "kuaikanmanhua.com" in url:
             return _scrape_kuaikan(url, session)
-        elif "bilibili.com" in url:
+        elif "manga.bilibili.com" in url:
             return _scrape_bilibili_manga(url, session)
         elif "mangadex.org" in url:
             return _scrape_mangadex(url, session)
@@ -838,14 +825,21 @@ def scrape(url: str, session: "requests.Session | None" = None) -> MangaInfo:
             return _scrape_naver_series(url, session)
         elif "page.kakao.com" in url:
             return _scrape_kakao_page(url, session)
+        else:
+            return _scrape_generic(url, session)
+    except Exception as e:
+        logger.error(f"Error scraping {url}: {e}")
+        return None
 
-        return _scrape_generic(url, session)
 
-    except requests.exceptions.Timeout:
-        raise ConnectionError(f"Request timed out for {url}")
-    except requests.exceptions.ConnectionError as e:
-        raise ConnectionError(f"Cannot connect to {url}: {e}")
-    except requests.exceptions.HTTPError as e:
-        raise ConnectionError(
-            f"HTTP error {e.response.status_code} for {url}"
-        )
+def get_session() -> requests.Session:
+    """Returns a requests session configured with retries."""
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+
+    session = requests.Session()
+    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
