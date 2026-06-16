@@ -191,7 +191,7 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
         session = get_session()
         try:
             info = await asyncio.to_thread(scrape, url, session)
-            if not info or not info.latest_chapter:
+            if not info or (not info.chapters and (not info.title or info.title == "Unknown")):
                 await interaction.followup.send("⚠️ I couldn't track that manga. Make sure the URL is valid and the site is supported!")
                 return
         except Exception as e:
@@ -226,13 +226,19 @@ async def track(interaction: discord.Interaction, url: str, display_name: str = 
         
     await interaction.followup.send(f"✅ Now tracking: **{entry.display_name}**\n<{url}>")
     
-    bot.tracker.update_chapter(url, info.latest_chapter, info.title, info.cover_url)
+    bot.tracker.update_chapter(url, info.chapters, info.title, info.cover_url)
+    
     embed = discord.Embed(
         title=info.title,
-        description=f"**Latest Chapter:** {info.latest_chapter.title}\n**Chapter Number:** {info.latest_chapter.number:g}",
         color=discord.Color.blurple(),
         url=url
     )
+    if info.chapters:
+        latest_chapter = info.chapters[-1]
+        embed.description = f"**Latest Chapter:** {latest_chapter.title}\n**Chapter Number:** {latest_chapter.number:g}"
+    else:
+        embed.description = "**Latest Chapter:** None yet (Unreleased)"
+        
     if info.cover_url:
         embed.set_thumbnail(url=info.cover_url)
         
