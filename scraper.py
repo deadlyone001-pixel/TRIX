@@ -230,6 +230,9 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
             nuxt_script = txt
             break
 
+    if not nuxt_script:
+        logger.warning(f"Kuaikan NUXT decode failed: window.__NUXT__ not found in page (possible bot protection/captcha). url={url}")
+
     if nuxt_script:
         try:
             var_map = _decode_nuxt_script(nuxt_script)
@@ -248,6 +251,8 @@ def _scrape_kuaikan(url: str, session: requests.Session) -> MangaInfo:
 
             # Narrow down to just the comics array if possible to avoid grabbing recommended series
             comics_match = re.search(r'comics:\[(.*?)\]', body)
+            if not comics_match:
+                logger.warning(f"Kuaikan NUXT decode: 'comics:[]' array not found in NUXT body for {url}")
             search_area = comics_match.group(1) if comics_match else body
 
             # Find comic entries: {id:VAR, title:VAR, cover_image_url:VAR}
@@ -573,9 +578,16 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
     except requests.exceptions.RequestException as e:
         logger.warning(f"Direct connection to ac.qq.com failed ({type(e).__name__}). Using proxy fallback...")
         proxy_url = f"https://api.allorigins.win/raw?url={urllib.parse.quote(url)}"
-        r_proxy = session.get(proxy_url, timeout=15)
-        r_proxy.raise_for_status()
-        html = r_proxy.text
+        try:
+            r_proxy = session.get(proxy_url, timeout=15)
+            r_proxy.raise_for_status()
+            html = r_proxy.text
+        except requests.exceptions.RequestException as e2:
+            logger.warning(f"allorigins proxy failed ({type(e2).__name__}). Using codetabs proxy fallback...")
+            proxy_url_2 = f"https://api.codetabs.com/v1/proxy?quest={urllib.parse.quote(url)}"
+            r_proxy_2 = session.get(proxy_url_2, timeout=15)
+            r_proxy_2.raise_for_status()
+            html = r_proxy_2.text
 
     soup = BeautifulSoup(html, "lxml")
 

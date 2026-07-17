@@ -78,7 +78,7 @@ class MangaBot(discord.Client):
                 # Run synchronous scrape function in a separate thread
                 async with semaphore:
                     info = await asyncio.to_thread(scrape, entry.url, session)
-                if not info.chapters:
+                if not info or not info.chapters:
                     self.tracker.record_error(entry.url)
                     return
 
