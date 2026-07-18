@@ -93,6 +93,10 @@ class MangaBot(discord.Client):
                     import re
                     from datetime import datetime
                     
+                    if len(new_chapters) > 5:
+                        logger.warning(f"Flood detected for {info.title}: {len(new_chapters)} new chapters. Limiting notifications to last 5.")
+                        new_chapters = new_chapters[-5:]
+
                     for chapter in new_chapters:
                         logger.info(f"NEW chapter for {info.title}: Ch.{chapter.number}")
                         display = entry.display_name or info.title

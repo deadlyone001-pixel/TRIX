@@ -628,13 +628,21 @@ def _scrape_ac_qq(url: str, session: requests.Session) -> MangaInfo:
         logger.warning(f"No chapters found for Tencent AC URL: {url}")
         return MangaInfo(title=manga_title, chapters=[], cover_url=cover_url)
 
-    # Sort numerically; if all nums are 0, fallback to their index
-    if any(c.number > 0 for c in chapters):
-        chapters.sort(key=lambda c: c.number)
-    else:
-        # No chapters had valid numbers (e.g. they are just titled "Prologue")
-        for i, c in enumerate(chapters):
-            c.number = float(i + 1)
+    # Tencent lists oldest to newest. Infer numbers for chapters without a clear number.
+    last_num = 0.0
+    for c in chapters:
+        if c.number == 0.0:
+            if '（1）' in c.title or '(1)' in c.title or '（上' in c.title or '(上' in c.title or '上)' in c.title or '上）' in c.title:
+                c.number = float(int(last_num) + 1) + 0.1
+            elif '（2）' in c.title or '(2)' in c.title or '（中' in c.title or '(中' in c.title or '中)' in c.title or '中）' in c.title:
+                c.number = float(int(last_num)) + 0.2
+            elif '（3）' in c.title or '(3)' in c.title or '（下' in c.title or '(下' in c.title or '下)' in c.title or '下）' in c.title:
+                c.number = float(int(last_num)) + 0.3
+            else:
+                c.number = float(int(last_num) + 1)
+        if c.number <= last_num:
+            c.number = round(last_num + 0.01, 2)
+        last_num = c.number
             
     latest = chapters[-1]
 
